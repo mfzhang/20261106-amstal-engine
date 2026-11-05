@@ -153,13 +153,15 @@ Adheres strictly to the QARE-MM v1.3 Target Output API Contract:
   },
   "signal_breakdown": {
     "residual_momentum_20d_rank": 0.78,
-    "overnight_vs_intraday_skew": 0.42,
-    "amihud_illiquidity_z": -0.31,
-    "closing_power_z": 1.15,
+    "overnight_return_rank": 0.42,
+    "intraday_return_rank": 0.15,
+    "amihud_illiquidity_rank": -0.31,
+    "closing_power_rank": 0.65,
     "decayed_finbert_sentiment": 0.54,
     "decayed_form4_insider_cluster": 0.82,
     "decayed_pead_shock": 0.35,
     "decayed_10q_legal_risk_delta": -0.04,
+    "decayed_mda_catalyst_score": 0.28,
     "peer_gat_spillover": 0.49,
     "smart_money_divergence_pos": 0.0,
     "smart_money_divergence_neg": 0.19
@@ -287,11 +289,13 @@ Because the market ETF (`SPY`) and GICS Sector ETFs (`ETF_s`, e.g., `XLK`, `XLV`
    By construction: $\text{Cov}(r_{\text{SPY}, t}, r_{\text{ETF}_s, \perp, t}) = 0$.
 
 2. **Stage 2: Stock Residualization against SPY and Orthogonal Sector**:
-   Regress total stock log-return on market and orthogonal sector residual:
+   Regress total stock log-return on market and orthogonal sector residual over $[t-60, t-1]$ with an intercept:
+   $$r_{i, \tau} = \alpha_{i, t-1} + \beta_{i, \text{mkt}, t-1} \cdot r_{\text{SPY}, \tau} + \beta_{i, \text{sec}, t-1} \cdot r_{\text{ETF}_s, \perp, \tau} + e_{i, \tau}$$
+   Out-of-sample residualization on day $t$ strips strictly the systematic factor exposures (never subtracting the stock's idiosyncratic drift $\alpha$):
    $$r_{i, t} = \ln\left(\frac{P_{i, t}}{P_{i, t-1}}\right)$$
-   $$\epsilon_{i, t} = r_{i, t} - \left(\hat{\alpha}_{i, t-1} + \hat{\beta}_{i, \text{mkt}, t-1} \cdot r_{\text{SPY}, t} + \hat{\beta}_{i, \text{sec}, t-1} \cdot r_{\text{ETF}_s, \perp, t}\right)$$
+   $$\epsilon_{i, t} = r_{i, t} - \left(\hat{\beta}_{i, \text{mkt}, t-1} \cdot r_{\text{SPY}, t} + \hat{\beta}_{i, \text{sec}, t-1} \cdot r_{\text{ETF}_s, \perp, t}\right)$$
 
-This guarantees stable regression coefficients ($\hat{\beta}_{i, \text{mkt}}$ remains the true total market beta, while $\hat{\beta}_{i, \text{sec}}$ captures pure industry exposure orthogonal to `SPY`), yielding a mathematically robust idiosyncratic residual return $\epsilon_{i, t}$.
+This guarantees stable regression coefficients ($\hat{\beta}_{i, \text{mkt}}$ remains the true total market beta, while $\hat{\beta}_{i, \text{sec}}$ captures pure industry exposure orthogonal to `SPY`), yielding a mathematically robust idiosyncratic residual return $\epsilon_{i, t}$ that isolates true stock-specific alpha.
 * **Numerical Stability & Strict Out-of-Sample Projection**:
   * Both Stage 1 and Stage 2 OLS regressions for day $t$ are fit strictly over the historical window $\tau \in [t-60, t-1]$ (where $\nu_{s, \tau}$ and $r_{\text{SPY}, \tau}$ are orthogonal inside the window, decomposing Stage 2 into two independent univariate projections) and applied out-of-sample to day $t$.
   * Denominator variances include a ridge floor ($\text{Var}(x) + 10^{-8}$) and betas are clipped to $\hat{\beta}_{i, \text{mkt}} \in [-1.0, +4.0]$ and $\hat{\beta}_{i, \text{sec}} \in [-3.0, +3.0]$ to prevent division-by-zero or corporate-action spikes during trading halts.
@@ -333,12 +337,33 @@ At Gate 1, Sample-Weighted LightGBM/CatBoost competes directly against the 1-Lay
 ### 5.6 Continuous Event-Decay Kernel `(Batch, 12)`
 Asynchronous catalysts decay exponentially over elapsed trading days ($\Delta d$) since their Point-in-Time acceptance timestamp ($>16:00\text{ EST} \to t+1$):
 $$X_{\text{event}}(t) = X_0 \cdot \exp\left(-\frac{\ln(2)}{\tau} \cdot \Delta d\right)$$
-* FinBERT News Sentiment: $\tau_{\text{news}} = 3.0\text{ days}$
-* PEAD Earnings Shock: $\tau_{\text{pead}} = 10.0\text{ days}$
-* SEC 10-Q/10-K Redline Diffs: $\tau_{\text{legal}} = 15.0\text{ days}$
-* SEC Form 4 Open-Market Insider Clusters (ex-10b5-1): $\tau_{\text{form4}} = 20.0\text{ days}$
 
-### 5.7 Variance-Sorted Forward-Filtered HMM (`regime_hmm.py`)
+| Index | Feature Name | Source / Kernel |
+| :---: | :--- | :--- |
+| `0-1` | Decayed FinBERT Sentiment & Age | News headlines passed through local FinBERT ($\tau = 3\text{d}$) |
+| `2-3` | Decayed Form 4 Insider Score & Age | SEC EDGAR Form 4 open-market cluster purchases/sales ex-10b5-1 ($\tau = 20\text{d}$) |
+| `4-5` | Decayed PEAD Earnings Shock & Age | Post-earnings announcement volume-scaled residual shock ($\tau = 10\text{d}$) |
+| `6` | Decayed 10-Q Item 1A Risk Delta | `difflib` Item 1A redline delta scored via `Llama-3.1-8B` ($\tau = 15\text{d}$) |
+| `7` | Decayed MD&A Catalyst Score | `difflib` Item 7/Item 2 redline delta scored via `Llama-3.1-8B` ($\tau = 15\text{d}$) |
+| `8` | SEC Filing Staleness Age | Time elapsed since SEC acceptance timestamp ($>16:00\text{ EST} \to t+1$) |
+| `9-11`| Modality Missingness Masks | Explicit binary indicators (news, insider, 10-Q) |
+
+### 5.7 Dynamic Rolling Peer Graph Features `(Total_Nodes, 10)`
+- **10 Nodes per Subgraph:** Target ($v_0$), 4 GICS sub-industry peers ($v_1 \dots v_4$), 4 rolling 5-day lead-lag cross-correlation peers ($v_5 \dots v_8$), and the GICS Sector ETF ($v_9$).
+| Index | Node Feature Description |
+| :---: | :--- |
+| `0` | 20-day residual return $\sum \epsilon_{t-19:t}$ |
+| `1` | 5-day residual return $\sum \epsilon_{t-4:t}$ |
+| `2` | 60-day rolling Beta vs SPY ETF |
+| `3` | Point-in-Time Earnings Yield ($\text{TTM EPS}_{\text{filed}} / \text{Price}_t$) peer Z-score |
+| `4` | Point-in-Time YoY Quarterly Revenue Growth ($\text{Rev}_{\text{filed}}$) peer Z-score |
+| `5` | Point-in-Time Operating Margin ($\text{OpInc}_{\text{filed}} / \text{Rev}_{\text{filed}}$) peer Z-score |
+| `6` | 20-day Realized Idiosyncratic Volatility peer Z-score |
+| `7` | 5-day Lead-Lag cross-correlation coefficient with Target Node ($v_0$) |
+| `8` | Normalized Market Cap: $\ln(\text{MarketCap}_t) / 10$ |
+| `9` | Categorical Node Role: $0.0 = \text{Target}, 0.33 = \text{GICS Peer}, 0.66 = \text{Lead-Lag Peer}, 1.0 = \text{Sector ETF}$ |
+
+### 5.8 Variance-Sorted Forward-Filtered HMM (`regime_hmm.py`)
 Fits a 3-state Gaussian HMM (10 random EM restarts) on standardized daily `SPY` log-returns and `VIX` levels:
 1. **Fold-Scoped Standardization**: The `StandardScaler` for `SPY` and `VIX` is fit strictly on the 756-day training fold and applied out-of-sample to the validation and test folds.
 2. **Custom Log-Space Forward Filter (No `hmmlearn.predict_proba` Smoother Leak)**: Because `hmmlearn.GaussianHMM.predict_proba(X)` executes the forward-backward Baum-Welch smoother (leaking future states $x_{t+1:T}$), `regime_hmm.py` explicitly implements the causal log-space forward recursion using `scipy.special.logsumexp`:
@@ -347,7 +372,7 @@ Fits a 3-state Gaussian HMM (10 random EM restarts) on standardized daily `SPY` 
 3. **State Ordering by Return Variance**: Sorts states by return variance component $\Sigma_{0,rr} < \Sigma_{1,rr} < \Sigma_{2,rr}$ to enforce permutation invariance across walk-forward folds:
    `[State 0: Low-Vol Bull, State 1: Sideways, State 2: High-Vol Crash]`.
 
-### 5.8 Purged Triple-Barrier Labeling, Uniqueness Weighting & Walk-Forward Geometry
+### 5.9 Purged Triple-Barrier Labeling, Uniqueness Weighting & Walk-Forward Geometry
 Ternary labels $y_{i, t} \in \{0: \text{Buy}, 1: \text{Hold}, 2: \text{Sell}\}$ are generated on cumulative residual return paths $C_{\epsilon, i}(t, k) = \sum_{\Delta=1}^{k} \epsilon_{i, t+\Delta}$ for $k \in \{1 \dots 10\}$:
 * **1D Residual Volatility Scale ($\sigma_{\text{ATR}(\epsilon), i, t}$)**: Because $\epsilon_{i, t}$ is a 1D residual series rather than an OHLC bar, its horizon-scaled volatility unit is defined causally over $[t-19, t]$ as:
   $$\sigma_{\text{ATR}(\epsilon), i, t} = \sqrt{10} \cdot \sqrt{\frac{1}{20} \sum_{m=0}^{19} \epsilon_{i, t-m}^2}$$
@@ -364,7 +389,65 @@ Ternary labels $y_{i, t} \in \{0: \text{Buy}, 1: \text{Hold}, 2: \text{Sell}\}$ 
   * **Validation Split Purpose:** Used exclusively for model early stopping, LightGBM/GRU ensemble log-likelihood weighting, and fitting the post-hoc Temperature Scaler ($T > 0$) without touching the 3-month Out-of-Sample test fold.
   * **Re-fit Cadence:** Steps forward by 63 trading days (quarterly re-fit).
 
-### 5.9 Signed Smart-Money Divergence, Modality Masking & The `(B, 66)` Fused Tensor
+### 5.10 Neural Architecture Topology & The `(B, 66)` Fused Tensor
+
+```
+┌──────────────────────────────────────────────────────────────────────────────────────────────────┐
+│                                    AMSTAL NEURAL TOPOLOGY (v1.3)                                 │
+└──────────────────────────────────────────────────────────────────────────────────────────────────┘
+
+ [Dual-Mode Price & Microstructure]   [SEC EDGAR & NLP Alt-Data]       [Rolling Peer & GICS Graph]
+      Shape: (Batch, 126, 15)              Shape: (Batch, 12)             Nodes: (Total_Nodes, 10)
+  (Also summarized -> (Batch, 105)                 │                     Edges: (2, Total_Edges)
+     for Sample-Weighted LightGBM)                 │                                │
+                 │                                  ▼                                ▼
+                 ▼                      ┌───────────────────────┐          ┌───────────────────┐
+     ┌───────────────────────┐          │ Linear(12 -> 32)      │          │ 2-Layer PyG GAT   │
+     │ 1-Layer GRU / LSTM    │          │ + LayerNorm           │          │ (CPU-Pinned, 32d) │
+     │ + 2-Head Self-Attn    │          │ + GELU + Dropout(0.2) │          │ Root extracted    │
+     │ (CPU-Pinned, d = 32)  │          └───────────┬───────────┘          │ via batch.ptr[:-1]│
+     └───────────┬───────────┘                      │ (B, 1, 32)           └─────────┬─────────┘
+                 │ (B, 126, 32)                     │                                │
+                 └────────────────┬─────────────────┘                                │
+                                  ▼                                                  │
+                   ┌─────────────────────────────┐                                   │
+                   │ Modality-Masked Fusion      │                                   │
+                   │ • Phase 2 (Masks=0):        │                                   │
+                   │   Temporal Pooled (B, 32)   │                                   │
+                   │ • Phase 3 (Masks=1):        │                                   │
+                   │   Cross-Modal Attn (B, 32)  │                                   │
+                   └──────────────┬──────────────┘                                   │
+                                  │ (B, 32)                                          │ (B, 32)
+                                  └──────────────────────┬───────────────────────────┘
+                                                         ▼
+                                    Concat: [ (B, 32) || (B, 32) || [D+, D-] (B, 2) ]
+                                                      = (B, 66)
+                                                         │
+    [Filtered HMM Probabilities]                         ▼
+        Shape: (Batch, 3) ───────────────────► ┌───────────────────┐
+                                               │ Sigmoid Gate      │
+                                               │ Linear(3 -> 66)   │
+                                               └─────────┬─────────┘
+                                                         │ (B, 66)
+                                                         ▼
+                                               ┌───────────────────┐
+                                               │ Classification    │
+                                               │ Linear(66 -> 32)  │
+                                               │ + LayerNorm + SiLU│
+                                               │ + Dropout(0.3)    │
+                                               │ + Linear(32 -> 3) │
+                                               └─────────┬─────────┘
+                                                         │ Raw Logits: (B, 3)
+                                                         ▼
+                                               ┌───────────────────┐
+                                               │ Temperature Scale │
+                                               │ Softmax(z / T)    │
+                                               └─────────┬─────────┘
+                                                         │ Calibrated Probabilities: (B, 3)
+                                                         ▼
+                                         L1-Normalized Multi-Outcome Kelly Sizer
+```
+
 The $(B, 66)$ latent vector entering the HMM Sigmoid Gate in `fusion_net.py` is locked across Phases 2 and 3 as:
 $$\mathbf{h}_{\text{fused}} = [\mathbf{h}_{\text{temporal\_or\_cross}}^{(32)} \,\|\, \mathbf{h}_{\text{graph}}^{(32)} \,\|\, \mathbf{D}_t^{(2)}] \in \mathbb{R}^{(B, 66)}$$
 1. **Channels `0..31` — Temporal / Cross-Modal Representation $(B, 32)$**:
@@ -379,7 +462,7 @@ $$\mathbf{h}_{\text{fused}} = [\mathbf{h}_{\text{temporal\_or\_cross}}^{(32)} \,
      $$D_t^+ = \max(D_t, 0) \quad \text{(Media Euphoria into Institutional Selling / Distribution)}$$
      $$D_t^- = \max(-D_t, 0) \quad \text{(Media Panic into Institutional Buying / Accumulation)}$$
 
-### 5.10 Temperature Calibration, Configurable Execution Mode & Portfolio-Level $L_1$ Kelly Sizing
+### 5.11 Temperature Calibration, Configurable Execution Mode & Portfolio-Level $L_1$ Kelly Sizing
 1. **Temperature Scaling (Post-Hoc Calibration)**:
    Fits scalar $T > 0$ via Negative Log-Likelihood minimization on the purged 126-day validation split:
    $$\hat{p}_k = \frac{\exp(z_k / T)}{\sum_{j=0}^2 \exp(z_j / T)}$$

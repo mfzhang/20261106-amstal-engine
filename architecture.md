@@ -125,15 +125,15 @@ A persistent `.duckdb` database file enforces a single-writer OS file lock: if `
 Amstal solves both failure modes deterministically:
 1. **Zero `.duckdb` Lock Files**: Both Python and Tauri Rust open ephemeral `duckdb.connect(":memory:")` sessions and query `.parquet` files directly via `SELECT * FROM read_parquet(...)`.
 2. **Atomic POSIX Replacement**:
-   ```python
-   import os
-   from pathlib import Path
+```python
+import os
+from pathlib import Path
 
-   def atomic_write_parquet(df, target_path: Path) -> None:
-       tmp_path = target_path.with_suffix(".parquet.tmp")
-       df.write_parquet(tmp_path)
-       os.replace(tmp_path, target_path)  # Atomic POSIX inode swap
-   ```
+def atomic_write_parquet(df, target_path: Path) -> None:
+    tmp_path = target_path.with_suffix(".parquet.tmp")
+    df.write_parquet(tmp_path)
+    os.replace(tmp_path, target_path)  # Atomic POSIX inode swap
+```
    Any concurrent `duckdb-rs` query in Tauri either reads the complete previous inode or the complete new inode—never a partial file.
 
 ### 2.3 Sequence Diagram: Mnemonic Command & Analytical Query Execution
@@ -289,7 +289,7 @@ To eliminate collinearity between `SPY` and GICS Sector ETFs ($\rho \ge 0.80$), 
 1. **Stage 1 (Sector Orthogonalization against SPY)**:
    $$r_{\text{ETF}_s, t} = \hat{\alpha}_{s, t-1} + \hat{\beta}_{s, \text{mkt}, t-1} \cdot r_{\text{SPY}, t} + \nu_{s, t} \implies r_{\text{ETF}_s, \perp, t} = \nu_{s, t}$$
 2. **Stage 2 (Stock Residualization against SPY and Orthogonal Sector)**:
-   $$\epsilon_{i, t} = r_{i, t} - \left(\hat{\alpha}_{i, t-1} + \hat{\beta}_{i, \text{mkt}, t-1} \cdot r_{\text{SPY}, t} + \hat{\beta}_{i, \text{sec}, t-1} \cdot r_{\text{ETF}_s, \perp, t}\right)$$
+   $$\epsilon_{i, t} = r_{i, t} - \left(\hat{\beta}_{i, \text{mkt}, t-1} \cdot r_{\text{SPY}, t} + \hat{\beta}_{i, \text{sec}, t-1} \cdot r_{\text{ETF}_s, \perp, t}\right)$$
 By construction, $\text{Cov}(r_{\text{SPY}}, r_{\text{ETF}_s, \perp}) = 0$, guaranteeing stable regression betas and pure idiosyncratic residuals $\epsilon_{i, t}$.
 
 ### 5.2 Multi-Modal Tensor Topology & Phase 2/3 Modality Masking
@@ -338,11 +338,13 @@ By construction, $\text{Cov}(r_{\text{SPY}}, r_{\text{ETF}_s, \perp}) = 0$, guar
                                                       └──────┬──────┘
                                                              │ (B, 66)
                                                              ▼
-                                                      ┌─────────────┐
-                                                      │ Head: 66->32│
-                                                      │ LayerNorm   │
-                                                      │ Linear-> 3  │
-                                                      └──────┬──────┘
+                                               ┌───────────────────┐
+                                               │ Classification    │
+                                               │ Linear(66 -> 32)  │
+                                               │ + LayerNorm + SiLU│
+                                               │ + Dropout(0.3)    │
+                                               │ + Linear(32 -> 3) │
+                                               └─────────┬─────────┘
                                                              │ Raw Logits (B, 3)
                                                              ▼
                                                       ┌─────────────┐

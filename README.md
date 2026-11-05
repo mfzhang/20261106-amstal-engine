@@ -137,7 +137,7 @@ Because `SPY` and GICS Sector ETFs ($\text{ETF}_s$) frequently exhibit correlati
    $$r_{\text{ETF}_s, t} = \hat{\alpha}_{s, t-1} + \hat{\beta}_{s, \text{mkt}, t-1} \cdot r_{\text{SPY}, t} + r_{\text{ETF}_s, \perp, t}$$
 2. **Stage 2 (Stock Residualization):**
    $$r_{i, t} = \ln\left(\frac{P_{i, t}}{P_{i, t-1}}\right)$$
-   $$\epsilon_{i, t} = r_{i, t} - \left(\hat{\alpha}_{i, t-1} + \hat{\beta}_{i, \text{mkt}, t-1} \cdot r_{\text{SPY}, t} + \hat{\beta}_{i, \text{sec}, t-1} \cdot r_{\text{ETF}_s, \perp, t}\right)$$
+   $$\epsilon_{i, t} = r_{i, t} - \left(\hat{\beta}_{i, \text{mkt}, t-1} \cdot r_{\text{SPY}, t} + \hat{\beta}_{i, \text{sec}, t-1} \cdot r_{\text{ETF}_s, \perp, t}\right)$$
    Guarantees $\text{Cov}(r_{\text{SPY}}, r_{\text{ETF}_s, \perp}) = 0$, eliminating collinear beta sign swings and isolating pure idiosyncratic return $\epsilon_{i, t}$. Both regressions are fit strictly within $[t-60, t-1]$ and applied out-of-sample to day $t$ with a variance ridge floor ($\text{Var}(x) + 10^{-8}$) and beta clipping ($\hat{\beta}_{\text{mkt}} \in [-1, 4]$, $\hat{\beta}_{\text{sec}} \in [-3, 3]$).
 
 ### 2. Cross-Sectional Rank Normalization
@@ -234,7 +234,18 @@ The $(B, 66)$ fused vector entering the HMM Sigmoid Gate concatenates:
 
 ### Dynamic Rolling Peer Graph `(Total_Nodes, 10)`
 - **10 Nodes per Subgraph:** Target ($v_0$), 4 GICS sub-industry peers ($v_1 \dots v_4$), 4 rolling 5-day lead-lag cross-correlation peers ($v_5 \dots v_8$), and the GICS Sector ETF ($v_9$).
-- **Features:** 5d/20d residual return, 60d market beta, Point-in-Time XBRL fundamentals via `edgartools` + deterministic US-GAAP tag hierarchy (Earnings Yield, Revenue Growth, Operating Margin stamped strictly by `filed` date), realized idiosyncratic volatility, and lead-lag cross-correlation.
+| Index | Node Feature Description |
+| :---: | :--- |
+| `0` | 20-day residual return $\sum \epsilon_{t-19:t}$ |
+| `1` | 5-day residual return $\sum \epsilon_{t-4:t}$ |
+| `2` | 60-day rolling Beta vs SPY ETF |
+| `3` | Point-in-Time Earnings Yield ($\text{TTM EPS}_{\text{filed}} / \text{Price}_t$) peer Z-score |
+| `4` | Point-in-Time YoY Quarterly Revenue Growth ($\text{Rev}_{\text{filed}}$) peer Z-score |
+| `5` | Point-in-Time Operating Margin ($\text{OpInc}_{\text{filed}} / \text{Rev}_{\text{filed}}$) peer Z-score |
+| `6` | 20-day Realized Idiosyncratic Volatility peer Z-score |
+| `7` | 5-day Lead-Lag cross-correlation coefficient with Target Node ($v_0$) |
+| `8` | Normalized Market Cap: $\ln(\text{MarketCap}_t) / 10$ |
+| `9` | Categorical Node Role: $0.0 = \text{Target}, 0.33 = \text{GICS Peer}, 0.66 = \text{Lead-Lag Peer}, 1.0 = \text{Sector ETF}$ |
 
 ---
 
@@ -292,13 +303,15 @@ The engine emits structured, machine-verifiable trade decisions adhering to this
   },
   "signal_breakdown": {
     "residual_momentum_20d_rank": 0.78,
-    "overnight_vs_intraday_skew": 0.42,
-    "amihud_illiquidity_z": -0.31,
-    "closing_power_z": 1.15,
+    "overnight_return_rank": 0.42,
+    "intraday_return_rank": 0.15,
+    "amihud_illiquidity_rank": -0.31,
+    "closing_power_rank": 0.65,
     "decayed_finbert_sentiment": 0.54,
     "decayed_form4_insider_cluster": 0.82,
     "decayed_pead_shock": 0.35,
     "decayed_10q_legal_risk_delta": -0.04,
+    "decayed_mda_catalyst_score": 0.28,
     "peer_gat_spillover": 0.49,
     "smart_money_divergence_pos": 0.0,
     "smart_money_divergence_neg": 0.19
