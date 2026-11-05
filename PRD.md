@@ -97,18 +97,18 @@ To prevent single-writer database lock collisions (`IO Error: Could not set lock
 ### 2.3 Process Lifecycle Management & Heartbeat Protocol
 1. **Managed Child Daemon**: Upon launch, `amstal-terminal` checks for an active `amstal-engine` listener at `/tmp/amstal.sock` and `127.0.0.1:8194`. If absent, the Tauri Rust backend automatically spawns the engine daemon process.
 2. **Heartbeat & Self-Healing**:
-   * The terminal issues a ping every 2,000 ms over UDS: `{"type": "PING", "timestamp": 1730825600000}`.
+   * The terminal issues a ping every 2,000 ms over UDS: `{"jsonrpc": "2.0", "method": "ping", "params": {"timestamp": 1730825600000}, "id": "ping-1"}`.
    * If the engine fails to respond to 3 consecutive pings, the terminal flags the UI with a `"DAEMON_OFFLINE"` amber indicator and triggers an automated zero-downtime hot-restart.
 3. **Graceful Teardown**: Closing the terminal sends a `SIGTERM` signal through UDS, prompting `amstal-engine` to complete any in-flight `.parquet.tmp` atomic renames and cleanly unlink `/tmp/amstal.sock`.
 
 ### 2.4 Bi-Directional Message Schemas
 
-#### 1. Terminal to Engine: Mnemonic Command Execution
+#### 1. Terminal to Engine: Mnemonic Command Execution (JSON-RPC 2.0)
 ```json
 {
-  "message_id": "req-9842a1",
-  "client_timestamp": "2026-11-05T20:00:00.120Z",
-  "command": {
+  "jsonrpc": "2.0",
+  "method": "execute_command",
+  "params": {
     "raw_input": "NVDA US <EQUITY> FA <GO>",
     "parsed": {
       "identifier": "NVDA",
@@ -121,8 +121,10 @@ To prevent single-writer database lock collisions (`IO Error: Could not set lock
         "years": 5,
         "point_in_time": true
       }
-    }
-  }
+    },
+    "client_timestamp": "2026-11-05T20:00:00.120Z"
+  },
+  "id": "req-9842a1"
 }
 ```
 
@@ -213,7 +215,7 @@ To avoid frontend scope creep and ensure the core quantitative workflow launches
 | :--- | :--- | :--- |
 | **`GP <GO>`** | Graph Price | High-performance TradingView Lightweight Charts with multi-timeframe candlesticks, intraday VWAP, ATR barriers, and overnight/intraday return panes. |
 | **`PORT <GO>`** | Portfolio & Kelly Risk | Live QARE-MM v1.3 signal breakdown, calibrated probabilities, Multi-Outcome Fractional Kelly sizing, and $L_1$-normalized portfolio weights. |
-| **`HMM <GO>`** | Macro Volatility Regime | Forward-filtered 3-state Gaussian HMM dashboard visualizing real-time probabilities for Low-Vol Bull, Sideways, and Crash regimes. |
+| **`HMM <GO>`** | Macro Volatility Regime | Forward-filtered 3-state Gaussian HMM dashboard visualizing real-time probabilities for Low-Volatility, Medium-Volatility, and High-Volatility/Turbulent regimes. |
 | **`DES <GO>`** | Description | Security master factsheet, business overview, CIK/FIGI identifiers, GICS classification, market cap, 60d orthogonalized betas, dividend yield. |
 | **`FA <GO>`** | Financial Analysis | Point-in-Time 10-year financial statements sourced via `edgartools` + deterministic US-GAAP XBRL tag fallback hierarchy, keyed strictly by `filed` date. |
 
@@ -335,7 +337,7 @@ At Gate 1, Sample-Weighted LightGBM/CatBoost competes directly against the 1-Lay
 7. Monthly Trend Velocity (21-day OLS linear regression slope): $\text{Slope}_{21}(\tilde{x})_{i, t}$
 
 ### 5.6 Continuous Event-Decay Kernel `(Batch, 12)`
-Asynchronous catalysts decay exponentially over elapsed trading days ($\Delta d$) since their Point-in-Time acceptance timestamp ($>16:00\text{ EST} \to t+1$):
+Asynchronous catalysts decay exponentially over elapsed trading days ($\Delta d$) since their Point-in-Time acceptance timestamp ($>16:00\text{ America/New_York} \to t+1$):
 $$X_{\text{event}}(t) = X_0 \cdot \exp\left(-\frac{\ln(2)}{\tau} \cdot \Delta d\right)$$
 
 | Index | Feature Name | Source / Kernel |
@@ -345,7 +347,7 @@ $$X_{\text{event}}(t) = X_0 \cdot \exp\left(-\frac{\ln(2)}{\tau} \cdot \Delta d\
 | `4-5` | Decayed PEAD Earnings Shock & Age | Post-earnings announcement volume-scaled residual shock ($\tau = 10\text{d}$) |
 | `6` | Decayed 10-Q Item 1A Risk Delta | `difflib` Item 1A redline delta scored via `Llama-3.1-8B` ($\tau = 15\text{d}$) |
 | `7` | Decayed MD&A Catalyst Score | `difflib` Item 7/Item 2 redline delta scored via `Llama-3.1-8B` ($\tau = 15\text{d}$) |
-| `8` | SEC Filing Staleness Age | Time elapsed since SEC acceptance timestamp ($>16:00\text{ EST} \to t+1$) |
+| `8` | SEC Filing Staleness Age | Time elapsed since SEC acceptance timestamp ($>16:00\text{ America/New_York} \to t+1$) |
 | `9-11`| Modality Missingness Masks | Explicit binary indicators (news, insider, 10-Q) |
 
 ### 5.7 Dynamic Rolling Peer Graph Features `(Total_Nodes, 10)`
@@ -370,7 +372,7 @@ Fits a 3-state Gaussian HMM (10 random EM restarts) on standardized daily `SPY` 
    $$\log \tilde{\alpha}_t(k) = \log P(x_t \mid S_t = k) + \text{logsumexp}_{j=0}^2 \left(\log \alpha_{t-1}(j) + \log A_{j, k}\right), \quad p_t(k) = \exp\left(\log \tilde{\alpha}_t(k) - \text{logsumexp}_{j=0}^2 \log \tilde{\alpha}_t(j)\right)$$
    This prevents both forward-looking bias and floating-point underflow over long time horizons.
 3. **State Ordering by Return Variance**: Sorts states by return variance component $\Sigma_{0,rr} < \Sigma_{1,rr} < \Sigma_{2,rr}$ to enforce permutation invariance across walk-forward folds:
-   `[State 0: Low-Vol Bull, State 1: Sideways, State 2: High-Vol Crash]`.
+   `[State 0: Low-Volatility, State 1: Medium-Volatility, State 2: High-Volatility/Turbulent]`.
 
 ### 5.9 Purged Triple-Barrier Labeling, Uniqueness Weighting & Walk-Forward Geometry
 Ternary labels $y_{i, t} \in \{0: \text{Buy}, 1: \text{Hold}, 2: \text{Sell}\}$ are generated on cumulative residual return paths $C_{\epsilon, i}(t, k) = \sum_{\Delta=1}^{k} \epsilon_{i, t+\Delta}$ for $k \in \{1 \dots 10\}$:
@@ -467,7 +469,7 @@ $$\mathbf{h}_{\text{fused}} = [\mathbf{h}_{\text{temporal\_or\_cross}}^{(32)} \,
    Fits scalar $T > 0$ via Negative Log-Likelihood minimization on the purged 126-day validation split:
    $$\hat{p}_k = \frac{\exp(z_k / T)}{\sum_{j=0}^2 \exp(z_j / T)}$$
 2. **Configurable Execution Mode (`LONG_ONLY` Default vs. `LONG_SHORT` Diagnostics)**:
-   * **Default Portfolio Mode (`execution_mode = "LONG_ONLY"`)**: Constrains single-stock allocation to $f_i \in [0, f_{\max}]$ with $f_{\max} = 0.10$. When `Underperform/Sell` dominates, optimal long allocation solves to $f_i^* = 0.0$ (exiting long positions into cash, never opening margin short positions).
+   * **Default Portfolio Mode (`execution_mode = "LONG_ONLY"`)**: Constrains single-stock allocation to $f_i \in [0, f_{\max}]$ with $f_{\max} = 0.10$. Optimal long allocation $f_i^*$ is determined strictly by the Kelly objective: when expected marginal net return is non-positive ($\left.\frac{d\mathbb{E}[\ln(1 + f R_{\text{net}})]}{df}\right|_{f=0} \le 0$), the optimizer yields $f_i^* = 0.0$ (holding/exiting into cash, never opening margin short positions). Discrete UI action labels (`BUY`, `HOLD`, `SELL`) are formatted separately from position state and probability rankings.
    * **Diagnostic Stat-Arb Mode (`execution_mode = "LONG_SHORT"`)**: Evaluates cross-sectional Rank Information Coefficient (IC) and theoretical dollar-neutral Long-Short portfolio Sharpe in `metrics.py`.
 3. **Single-Stock Multi-Outcome Kelly Optimization & Base-Rate Payoff Centering**:
    Because the asymmetric $+2\sigma / -1\sigma$ barriers have unequal unconditional hit rates ($\bar{p}_{\text{buy}}, \bar{p}_{\text{hold}}, \bar{p}_{\text{sell}}$), class payoffs $b_k$ are estimated from the validation fold's realized class means and centered against the empirical validation prior $\bar{\mathbf{p}}$ so that $\sum_k \bar{p}_k b_k = 0$. This mathematically guarantees **Gate 4 Criterion #2**: any zero-skill or uninformative model outputting prior probabilities ($\hat{\mathbf{p}} = \bar{\mathbf{p}}$) has expected net return $0 - c = -0.0015 < 0$, yielding strictly $f_i^* = 0.0\%$ allocation.
@@ -534,7 +536,7 @@ Phase 4: Calibration, Kelly & Terminal   ──► [GATE 4: Brier Drops > 10% OO
    * Raw and processed vendor files (`data/*.parquet`) are strictly `.gitignored`. Users must supply their own API keys for Polygon.io, Tiingo, or Alpaca. Distributing cached vendor data violates redistribution agreements.
 2. **SEC EDGAR Rate-Limiting & Compliance**:
    * All requests to `sec.gov` strictly enforce a token-bucket rate limiter capped at $\le 10\text{ requests/sec}$.
-   * Every HTTP request in `sec_edgar.py` includes a declared User-Agent header conforming to SEC rules: `User-Agent: AmstalResearch AdminContact@amstal.internal`.
+   * Every HTTP request in `sec_edgar.py` must declare a User-Agent header configured via the `SEC_EDGAR_USER_AGENT` environment variable or `config.toml` conforming to SEC guidelines (format: `User-Agent: <OrganizationName> <ValidContactEmail>`, e.g., `User-Agent: AmstalResearch dev@yourdomain.com`). Requests without a valid declared contact email are blocked pre-flight.
 3. **Bloomberg Trademark & Trade Dress Disclaimer**:
    * Amstal is an independent open-source project unaffiliated with, nor endorsed by, Bloomberg Finance L.P. Mnemonic command conventions (`DES`, `FA`, `GP`, `<GO>`) are used solely for workflow interoperability.
 4. **Non-Investment Advice Disclaimer**:

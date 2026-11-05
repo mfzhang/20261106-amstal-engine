@@ -29,7 +29,7 @@ The system is architected to provide hedge-fund caliber Point-in-Time (PIT) data
 │  │   • Provider Plugins (OpenBB Pattern): Standardized Pydantic v2 Models (`StandardCandle`, `StandardXBRL`)   │  │
 │  │   • Stateless OLAP: In-memory `duckdb.connect(":memory:")` querying partitioned Apache Parquet files       │  │
 │  │   • Lock-Free Concurrency: Writes to `{ticker}.parquet.tmp` followed by POSIX atomic `os.replace()`        │  │
-│  │   • Point-in-Time (PIT) Validator: >16:00 EST rollover enforcement, `filed`-date fundamental alignment     │  │
+│  │   • Point-in-Time (PIT) Validator: >16:00 America/New_York (market close) rollover enforcement, `filed` date fundamental alignment │  │
 │  └─────────────────────────────────────────────────────┬──────────────────────────────────────────────────────┘  │
 │                                                        │                                                         │
 │                                                        ▼                                                         │
@@ -216,9 +216,9 @@ Amstal recreates Bloomberg's Reverse Polish Notation (RPN) command workflow via 
    * Displays real-time QARE-MM v1.3 signal breakdown across all 11 factor channels, Temperature-calibrated probabilities ($\hat{p}_{\text{buy}}, \hat{p}_{\text{hold}}, \hat{p}_{\text{sell}}$), unconstrained single-stock Kelly fraction, and $L_1$-normalized portfolio weights ($w_i$).
 3. **`HMM <GO>` (Macro Volatility Regime Monitor)**:
    * Visualizes forward-filtered 3-state Gaussian HMM probabilities:
-     * **State 0 (Green)**: Low-Vol Bull Market ($\Sigma_{0, rr}$ lowest variance).
-     * **State 1 (Amber)**: Sideways / Transitional Volatility ($\Sigma_{1, rr}$ medium variance).
-     * **State 2 (Red)**: High-Vol Crash / Panic ($\Sigma_{2, rr}$ highest variance).
+     * **State 0 (Green)**: Low-Volatility Regime ($\Sigma_{0, rr}$ lowest return variance).
+     * **State 1 (Amber)**: Normal / Medium-Volatility Regime ($\Sigma_{1, rr}$ medium return variance).
+     * **State 2 (Red)**: High-Volatility / Turbulent Regime ($\Sigma_{2, rr}$ highest return variance).
 4. **`DES <GO>` (Security Master Profile)**:
    * Header with Ticker, Name, Primary Exchange, CIK, FIGI, GICS Sector/Sub-Industry, 60-day orthogonalized market beta ($\hat{\beta}_{\text{mkt}}$) and sector beta ($\hat{\beta}_{\text{sec}}$), ADV, and Point-in-Time Item 1 business summary.
 5. **`FA <GO>` (Point-in-Time Financial Analysis)**:
@@ -274,7 +274,7 @@ Companies frequently switch XBRL taxonomy tags across reporting years. To constr
 * **Revenue**: `RevenueFromContractWithCustomerExcludingAssessedTax` $\to$ `Revenues` $\to$ `SalesRevenueNet` $\to$ `SalesRevenueGoodsNet`
 * **Operating Income**: `OperatingIncomeLoss` $\to$ `IncomeLossFromContinuingOperationsBeforeIncomeTaxesExtraordinaryItemsNoncontrollingInterest`
 * **Diluted EPS**: `EarningsPerShareDiluted` $\to$ `IncomeLossFromContinuingOperationsPerDilutedShare`
-* **Point-in-Time Rule**: Every fact is indexed strictly by its SEC `filed` acceptance timestamp (never back-dated to fiscal period `end` date). Filings accepted after `16:00 EST` on day $t$ are shifted strictly to $t+1$.
+* **Point-in-Time Rule**: Every fact is indexed strictly by its SEC `filed` acceptance timestamp (never back-dated to fiscal period `end` date). Filings accepted after `16:00 America/New_York` (local market close) on day $t$ are shifted strictly to $t+1$.
 
 ### 4.3 Hybrid LLM Backfill vs. Local Ongoing Inference (`sec_diff.py`)
 * **Historical Seed (One-Time Batch Backfill)**: Scoring `difflib` redlines for ~8,000 historical 10-Q/10-K filings (`250 stocks * 4 quarters * 8 years`) locally on a fanless M5 Air would require ~40 hours of sustained compute. `sec_diff.py` includes an async batch adapter for OpenAI-compatible inference endpoints (Groq / DeepInfra / Together running `Llama-3.1-8B-Instruct` at `temperature=0.0`) that materializes the historical Parquet cache in <45 minutes.

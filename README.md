@@ -174,7 +174,7 @@ $$X_{\text{event}}(t) = X_0 \cdot \exp\left(-\frac{\ln(2)}{\tau} \cdot \Delta d\
 A 3-state Gaussian HMM is fit on standardized `SPY` returns and `VIX` levels (with 10 random EM restarts, `StandardScaler` fit strictly on the 756-day training fold):
 * **Custom Log-Space Forward Filter Only:** Explicitly implements causal log-space forward recursion ($\alpha_t(k) = P(S_t = k \mid x_{1:t})$ via `scipy.special.logsumexp`). Calling `hmmlearn.GaussianHMM.predict_proba(X)` (which runs the forward-backward Baum-Welch smoother) is strictly banned to prevent forward-looking bias.
 * **Return-Variance State Alignment:** States are sorted by variance component $\Sigma_{k, rr}$ to ensure permutation invariance across walk-forward folds:
-  $$\Sigma_{0, rr} < \Sigma_{1, rr} < \Sigma_{2, rr} \implies [\text{State 0: Low-Vol Bull, State 1: Sideways, State 2: High-Vol Crash}]$$
+  $$\Sigma_{0, rr} < \Sigma_{1, rr} < \Sigma_{2, rr} \implies [\text{State 0: Low-Volatility, State 1: Medium-Volatility, State 2: High-Volatility/Turbulent}]$$
 
 ### 7. Purged Triple-Barrier Labeling, Uniqueness & Walk-Forward Geometry
 Ternary labels $y_{i, t} \in \{0: \text{Outperform}, 1: \text{Neutral}, 2: \text{Underperform}\}$ are defined on cumulative idiosyncratic return paths $C_{\epsilon, i}(t, k) = \sum_{\Delta=1}^k \epsilon_{i, t+\Delta}$ using the 1D horizon-scaled residual volatility $\sigma_{\text{ATR}(\epsilon), i, t} = \sqrt{10} \cdot \sqrt{\frac{1}{20}\sum_{m=0}^{19}\epsilon_{i, t-m}^2}$:

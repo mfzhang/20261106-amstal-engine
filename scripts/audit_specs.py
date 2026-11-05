@@ -14,8 +14,20 @@ import re
 import json
 from pathlib import Path
 
-ROOT = Path("/Users/shawnsc/Projects/amstal")
-ENGINE = ROOT / "amstal-engine"
+def get_repo_paths() -> tuple[Path, Path]:
+    here = Path(__file__).resolve()
+    for parent in [here.parent, here.parent.parent, here.parent.parent.parent]:
+        if (parent / "amstal-engine").is_dir() and (parent / "PRD.md").is_file():
+            return parent, parent / "amstal-engine"
+    if here.parent.name == "scripts" and here.parent.parent.name == "amstal-engine":
+        root = here.parent.parent.parent
+        return root, root / "amstal-engine"
+    cwd = Path.cwd()
+    if (cwd / "amstal-engine").is_dir():
+        return cwd, cwd / "amstal-engine"
+    return cwd, cwd
+
+ROOT, ENGINE = get_repo_paths()
 
 errors = []
 warnings = []
@@ -31,7 +43,7 @@ def warn(condition, msg):
 print("=== AMSTAL SPECIFICATION AUDIT LOOP ===")
 
 # --- Check 1: Root vs Engine File Synchronization ---
-for fname in ["PRD.md", "architecture.md"]:
+for fname in ["PRD.md", "architecture.md", "README.md"]:
     root_file = ROOT / fname
     engine_file = ENGINE / fname
     if not root_file.exists():
@@ -210,10 +222,11 @@ for name, text in [("PRD.md", prd_text), ("README.md", readme_text)]:
 # --- Check 10: JSON API Contract Complete Field Validation ---
 for name, text in [("PRD.md", prd_text), ("architecture.md", arch_text), ("README.md", readme_text)]:
     json_blocks = re.findall(r"```json\s*(\{.*?\})\s*```", text, re.DOTALL)
-    for block in json_blocks:
+    for idx, block in enumerate(json_blocks):
         try:
             data = json.loads(block)
-        except Exception:
+        except json.JSONDecodeError as e:
+            errors.append(f"Malformed JSON code block #{idx+1} in {name}: {e}")
             continue
         if "signal_breakdown" in data:
             sb = data["signal_breakdown"]
