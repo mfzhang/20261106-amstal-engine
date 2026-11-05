@@ -1,4 +1,4 @@
-# Stockman (QARE-MM v1.3)
+# Amstal (QARE-MM v1.3)
 
 [![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
 [![Python: 3.11+](https://img.shields.io/badge/Python-3.11%2B-brightgreen.svg)](https://www.python.org/)
@@ -40,7 +40,7 @@
 
 ## Overview
 
-Most academic multi-modal deep learning models applied to finance suffer from severe sample starvation, retail indicator decay, look-ahead leakage, and overparameterization. **Stockman (QARE-MM v1.3)** is built around institutional reality:
+Most academic multi-modal deep learning models applied to finance suffer from severe sample starvation, retail indicator decay, look-ahead leakage, and overparameterization. **Amstal (QARE-MM v1.3)** is built around institutional reality:
 
 - **Universe:** 250 liquid US mid-to-large-cap equities ($>\$25\text{M}$ ADV, S&P 500 ranks 100–500 and S&P MidCap 400, ex-Financials & Utilities).
 - **Target Horizon:** 5 to 20 trading days (10-day vertical swing horizon).
@@ -56,7 +56,7 @@ Most academic multi-modal deep learning models applied to finance suffer from se
 
 ## Key Architectural Tenets
 
-1. **Idiosyncratic Alpha Isolation:** Raw equity returns are roughly 65% macro and sector beta. Stockman explicitly strips rolling market (`SPY`) and GICS sector ETF betas before labeling or modeling.
+1. **Idiosyncratic Alpha Isolation:** Raw equity returns are roughly 65% macro and sector beta. Amstal explicitly strips rolling market (`SPY`) and GICS sector ETF betas before labeling or modeling.
 2. **Strict Point-in-Time (PIT) Integrity:** Any SEC filing, corporate announcement, or news headline published after 16:00 EST on day $t$ is strictly stamped to day $t+1$. Restated fundamentals and look-ahead graph structures are strictly forbidden.
 3. **Model-Agnostic Gating:** Sample-Weighted Gradient Boosted Decision Trees (LightGBM/CatBoost) and a compact temporal neural network (`hidden_size = 32`) compete as co-equals. If trees outperform sequence nets out-of-sample, the neural sequence branch is pruned.
 4. **Thermal & Memory Efficiency:** Designed to run full walk-forward sweeps and training on Apple Silicon Unified Memory (M5 Air 24 GB) without thermal throttling, leveraging right-sized 32-channel latent representations and offline Apache Parquet caching.
@@ -68,7 +68,7 @@ Most academic multi-modal deep learning models applied to finance suffer from se
 
 ```
 ┌──────────────────────────────────────────────────────────────────────────────────────────────────┐
-│                                   STOCKMAN NEURAL TOPOLOGY (v1.3)                                │
+│                                    AMSTAL NEURAL TOPOLOGY (v1.3)                                 │
 └──────────────────────────────────────────────────────────────────────────────────────────────────┘
 
  [Cross-Sectional Price & Flow]      [SEC EDGAR & NLP Alt-Data]       [Rolling Peer & GICS Graph]
@@ -308,7 +308,7 @@ The engine emits structured, machine-verifiable trade decisions adhering to this
 
 ## Hardware & Thermal Ergonomics
 
-Stockman is tuned for execution on an **Apple Silicon M5 MacBook Air (24 GB Unified Memory)** without active cooling:
+Amstal is tuned for execution on an **Apple Silicon M5 MacBook Air (24 GB Unified Memory)** without active cooling:
 
 - **Memory Footprint:** Core workspace and PyTorch/LightGBM use $\approx 2.8\text{ GB}$, leaving ample headroom for OS and background tasks.
 - **Process Isolation:** Heavy NLP models (`Llama-3.1-8B` Q8_0/Q4_K_M via Ollama and `ProsusAI/finbert`) never execute concurrently with model training. They run as offline checkpointed batch jobs pre-materializing scores into local Apache Parquet caches (`data/features/*.parquet`).
@@ -319,7 +319,7 @@ Stockman is tuned for execution on an **Apple Silicon M5 MacBook Air (24 GB Unif
 ## Directory Layout
 
 ```
-stockman/
+amstal-engine/
 ├── PRD.md                         # Product Requirements Document (Spec v1.3)
 ├── README.md                      # Architecture, Quant Specs & Usage Guide
 ├── LICENSE                        # MIT License
@@ -369,8 +369,8 @@ stockman/
 ### Installation
 
 ```bash
-git clone git@github.com:wwwrryyy/stockman.git
-cd stockman
+git clone git@github.com:wwwrryyy/amstal.git
+cd amstal/amstal-engine
 python3 -m venv venv
 source venv/bin/activate
 pip install -r requirements.txt
