@@ -25,7 +25,7 @@ def get_repo_paths() -> tuple[Path, Path]:
     cwd = Path.cwd()
     if (cwd / "amstal-engine").is_dir():
         return cwd, cwd / "amstal-engine"
-    return cwd, cwd
+    return cwd, Path("/path/to/missing/amstal-engine")
 
 ROOT, ENGINE = get_repo_paths()
 
@@ -42,8 +42,15 @@ def warn(condition, msg):
 
 print("=== AMSTAL SPECIFICATION AUDIT LOOP ===")
 
+if not ENGINE.is_dir():
+    errors.append(f"amstal-engine directory not found at {ENGINE}")
+
 # --- Check 1: Root vs Engine File Synchronization ---
-for fname in ["PRD.md", "architecture.md", "README.md"]:
+sync_files = ["PRD.md", "architecture.md"]
+if (ROOT / "README.md").exists() or (ENGINE / "README.md").exists():
+    sync_files.append("README.md")
+
+for fname in sync_files:
     root_file = ROOT / fname
     engine_file = ENGINE / fname
     if not root_file.exists():
@@ -91,14 +98,30 @@ for pattern, desc in expected_tensors:
             errors.append(f"Missing or mismatched tensor specification '{desc}' in {name}")
 
 # --- Check 4: Feature Dictionary Channel Counts ---
-# Sequence channels should be 0..14 (15 channels)
-# Match either single `ch` or ranges like `4–6` or `4-6`
-for ch in range(15):
-    pattern = rf"`{ch}`|`\d+[\-–]{ch}`|`{ch}[\-–]\d+`"
-    if not re.search(pattern, prd_text):
-        errors.append(f"PRD.md missing sequence channel `{ch}` in feature dictionary")
-    if not re.search(pattern, readme_text):
-        errors.append(f"README.md missing sequence channel `{ch}` in feature dictionary")
+# Sequence channels should be 0..14 (15 channels) parsed strictly from the Microstructure table
+def extract_sequence_channels(doc_name: str, text: str) -> set[int]:
+    indices = set()
+    match = re.search(r"\|\s*Channel\s*\|\s*Feature Name\s*\|.*?\n(.*?)(?=\n###|\n---|\Z)", text, re.DOTALL | re.IGNORECASE)
+    if not match:
+        errors.append(f"Could not locate Microstructure table in {doc_name}")
+        return indices
+    table_section = match.group(1)
+    row_matches = re.findall(r"\|\s*`([0-9\–\-]+)`\s*\|", table_section)
+    for cell in row_matches:
+        cell_clean = cell.replace("–", "-")
+        if "-" in cell_clean:
+            start_s, end_s = cell_clean.split("-", 1)
+            for ch in range(int(start_s), int(end_s) + 1):
+                indices.add(ch)
+        else:
+            indices.add(int(cell_clean))
+    return indices
+
+for name, text in [("PRD.md", prd_text), ("README.md", readme_text)]:
+    seq_channels = extract_sequence_channels(name, text)
+    missing = set(range(15)) - seq_channels
+    if missing:
+        errors.append(f"{name} Microstructure table missing sequence channels: {sorted(missing)}")
 
 # Alt-data channels: 12 features total
 for ch_label in ["0-1", "2-3", "4-5", "6", "7", "8", "9-11"]:
@@ -191,13 +214,16 @@ import textwrap
 for name, text in [("PRD.md", prd_text), ("architecture.md", arch_text), ("README.md", readme_text)]:
     py_blocks = re.findall(r"```python\s*(.*?)\s*```", text, re.DOTALL)
     for i, code in enumerate(py_blocks):
+        clean_code = textwrap.dedent(code)
         try:
-            # Dedent code that is indented inside lists/quotes and replace ellipsis
-            clean_code = textwrap.dedent(code)
-            clean_code = re.sub(r"\.\.\.", "pass", clean_code)
             ast.parse(clean_code)
         except SyntaxError as e:
-            errors.append(f"SyntaxError in Python code block #{i+1} in {name}: {e}")
+            # If doc contains standalone placeholder lines with ..., try replacing only standalone ... lines with pass
+            fallback_code = re.sub(r"^\s*\.\.\.\s*$", "pass", clean_code, flags=re.MULTILINE)
+            try:
+                ast.parse(fallback_code)
+            except SyntaxError:
+                errors.append(f"SyntaxError in Python code block #{i+1} in {name}: {e}")
 
 # --- Check 9: Markdown Table of Contents Anchor Verification ---
 def gfm_slug(header: str) -> str:

@@ -145,12 +145,12 @@ Adheres strictly to the QARE-MM v1.3 Target Output API Contract:
     "missing_modalities": []
   },
   "macro_regime": {
-    "current_state": "LOW_VOL_BULL",
+    "current_state": "LOW_VOLATILITY",
     "state_index": 0,
     "filtered_probabilities": {
-      "bull": 0.812,
-      "sideways": 0.145,
-      "crash": 0.043
+      "low_volatility": 0.812,
+      "medium_volatility": 0.145,
+      "high_volatility": 0.043
     }
   },
   "signal_breakdown": {
@@ -472,9 +472,12 @@ $$\mathbf{h}_{\text{fused}} = [\mathbf{h}_{\text{temporal\_or\_cross}}^{(32)} \,
    * **Default Portfolio Mode (`execution_mode = "LONG_ONLY"`)**: Constrains single-stock allocation to $f_i \in [0, f_{\max}]$ with $f_{\max} = 0.10$. Optimal long allocation $f_i^*$ is determined strictly by the Kelly objective: when expected marginal net return is non-positive ($\left.\frac{d\mathbb{E}[\ln(1 + f R_{\text{net}})]}{df}\right|_{f=0} \le 0$), the optimizer yields $f_i^* = 0.0$ (holding/exiting into cash, never opening margin short positions). Discrete UI action labels (`BUY`, `HOLD`, `SELL`) are formatted separately from position state and probability rankings.
    * **Diagnostic Stat-Arb Mode (`execution_mode = "LONG_SHORT"`)**: Evaluates cross-sectional Rank Information Coefficient (IC) and theoretical dollar-neutral Long-Short portfolio Sharpe in `metrics.py`.
 3. **Single-Stock Multi-Outcome Kelly Optimization & Base-Rate Payoff Centering**:
-   Because the asymmetric $+2\sigma / -1\sigma$ barriers have unequal unconditional hit rates ($\bar{p}_{\text{buy}}, \bar{p}_{\text{hold}}, \bar{p}_{\text{sell}}$), class payoffs $b_k$ are estimated from the validation fold's realized class means and centered against the empirical validation prior $\bar{\mathbf{p}}$ so that $\sum_k \bar{p}_k b_k = 0$. This mathematically guarantees **Gate 4 Criterion #2**: any zero-skill or uninformative model outputting prior probabilities ($\hat{\mathbf{p}} = \bar{\mathbf{p}}$) has expected net return $0 - c = -0.0015 < 0$, yielding strictly $f_i^* = 0.0\%$ allocation.
-   For informative signals ($\sum_k \hat{p}_k b_k > c$), `kelly_engine.py` solves net of 15 bps round-trip friction ($c = 0.0015$):
-   $$\max_{f \in [0, f_{\max}]} \mathbb{E}[\ln(1 + f \cdot R_{\text{net}})] = \hat{p}_{\text{buy}} \ln(1 + f (b_{\text{upper}} - c)) + \hat{p}_{\text{sell}} \ln(1 - f (|b_{\text{lower}}| + c)) + \hat{p}_{\text{hold}} \ln(1 + f (\bar{r}_{\text{vert}} - c))$$
+   Because the asymmetric $+2\sigma / -1\sigma$ barriers have unequal unconditional hit rates ($\bar{p}_{\text{buy}}, \bar{p}_{\text{hold}}, \bar{p}_{\text{sell}}$), raw outcome payoffs $R_{\text{upper}}, R_{\text{lower}}, R_{\text{vert}}$ (estimated from validation class means) are centered against the validation prior $\bar{\mathbf{p}}$ to define centered payoff variables:
+   $$\mu_{\bar{p}} = \bar{p}_{\text{buy}} R_{\text{upper}} + \bar{p}_{\text{sell}} R_{\text{lower}} + \bar{p}_{\text{hold}} R_{\text{vert}}$$
+   $$\tilde{b}_{\text{upper}} = R_{\text{upper}} - \mu_{\bar{p}}, \quad \tilde{b}_{\text{lower}} = R_{\text{lower}} - \mu_{\bar{p}}, \quad \tilde{b}_{\text{vert}} = R_{\text{vert}} - \mu_{\bar{p}} \implies \sum_k \bar{p}_k \tilde{b}_k = 0$$
+   This mathematically guarantees **Gate 4 Criterion #2**: any zero-skill or uninformative model outputting prior probabilities ($\hat{\mathbf{p}} = \bar{\mathbf{p}}$) has expected marginal net return $\left.\frac{d\mathbb{E}[\ln(1 + f R_{\text{net}})]}{df}\right|_{f=0} = \sum_k \bar{p}_k \tilde{b}_k - c = -0.0015 < 0$, yielding strictly $f_i^* = 0.0\%$ allocation.
+   For informative signals ($\sum_k \hat{p}_k \tilde{b}_k > c$), `kelly_engine.py` solves the concave log-wealth objective net of 15 bps friction ($c = 0.0015$) using centered payoffs:
+   $$\max_{f \in [0, f_{\max}]} \mathbb{E}[\ln(1 + f \cdot R_{\text{net}})] = \hat{p}_{\text{buy}} \ln(1 + f (\tilde{b}_{\text{upper}} - c)) + \hat{p}_{\text{sell}} \ln(1 - f (|\tilde{b}_{\text{lower}}| + c)) + \hat{p}_{\text{hold}} \ln(1 + f (\tilde{b}_{\text{vert}} - c))$$
    Scaled by macro regime multiplier $\kappa \in [0.25, 0.50]$ (Quarter/Half Kelly) with a single-stock ceiling of $10\%$ ($15\%$ absolute hard cap).
 4. **Portfolio-Level $L_1$ Gross Exposure Normalization**:
    To prevent concurrent buy signals across the 250-stock universe from exceeding 100% gross portfolio capital:
@@ -552,6 +555,9 @@ Phase 4: Calibration, Kelly & Terminal   ──► [GATE 4: Brier Drops > 10% OO
 amstal/
 ├── PRD.md                             # Master Unified PRD (This Document)
 ├── architecture.md                    # Master End-to-End Technical Architecture
+├── README.md                          # Workspace Overview & Monorepo Guide
+├── scripts/
+│   └── audit_specs.py                 # Automated Spec Audit & Invariant Feedback Loop
 ├── amstal-engine/                     # Quantitative Alpha & Risk Engine
 │   ├── PRD.md                         # Engine-synced PRD
 │   ├── architecture.md                # Engine-synced Technical Architecture

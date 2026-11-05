@@ -194,8 +194,8 @@ The $(B, 66)$ fused vector entering the HMM Sigmoid Gate concatenates:
 1. **Temperature Scaling:** Raw logits $z_k$ are calibrated on the purged 126-day validation split by finding scalar $T > 0$ minimizing Negative Log-Likelihood:
    $$\hat{p}_k = \frac{\exp(z_k / T)}{\sum_{j=0}^2 \exp(z_j / T)}$$
 2. **Base-Rate Payoff Centering & Configurable Kelly Sizing:**
-   - Validation class payoffs $b_k$ are centered against the empirical validation prior $\bar{\mathbf{p}}$ ($\sum_k \bar{p}_k b_k = 0$), mathematically guaranteeing that any zero-skill model ($\hat{\mathbf{p}} = \bar{\mathbf{p}}$) yields net return $-c = -0.0015 < 0$ and allocates $f_i^* = 0.0\%$ at Gate 4.
-   - **Default (`LONG_ONLY` Cash):** Solves for $f_i^* \in [0, 0.10]$ maximizing expected log-wealth net of 15 bps round-trip friction ($c = 0.0015$), scaled by regime multiplier $\kappa \in [0.25, 0.50]$. `Underperform/Sell` signals exit long positions to cash ($0.0\%$).
+   - Centered validation payoffs ($\tilde{b}_k = R_k - \mu_{\bar{p}}$, ensuring $\sum_k \bar{p}_k \tilde{b}_k = 0$) guarantee that any zero-skill model ($\hat{\mathbf{p}} = \bar{\mathbf{p}}$) yields marginal net return $-c = -0.0015 < 0$ and allocates $f_i^* = 0.0\%$ at Gate 4.
+   - **Default (`LONG_ONLY` Cash):** Solves for $f_i^* \in [0, 0.10]$ maximizing expected log-wealth using centered payoffs $\tilde{b}_k$ net of 15 bps friction ($c = 0.0015$), scaled by regime multiplier $\kappa \in [0.25, 0.50]$. Non-positive expected net drift exits positions to cash ($0.0\%$).
    - **Diagnostic (`LONG_SHORT` Stat-Arb):** Reports cross-sectional Rank IC and dollar-neutral Long-Short Sharpe in backtest diagnostics.
 3. **Portfolio-Level $L_1$ Gross Exposure Normalization:**
    $$w_i = \frac{f_i^* \cdot \kappa}{\max\left(1.0, \sum_{j=1}^N |f_j^* \cdot \kappa|\right)} \implies \sum_{i=1}^N |w_i| \le 1.0$$
@@ -293,12 +293,12 @@ The engine emits structured, machine-verifiable trade decisions adhering to this
     "missing_modalities": []
   },
   "macro_regime": {
-    "current_state": "LOW_VOL_BULL",
+    "current_state": "LOW_VOLATILITY",
     "state_index": 0,
     "filtered_probabilities": {
-      "bull": 0.812,
-      "sideways": 0.145,
-      "crash": 0.043
+      "low_volatility": 0.812,
+      "medium_volatility": 0.145,
+      "high_volatility": 0.043
     }
   },
   "signal_breakdown": {
