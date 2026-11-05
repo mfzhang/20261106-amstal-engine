@@ -1,12 +1,13 @@
-# Byte-compiled / optimized / DLL files
+# Environment & Secrets
+.env
+.env.*
+!.env.example
+
+# Python
 __pycache__/
 *.py[cod]
 *$py.class
-
-# C extensions
 *.so
-
-# Distribution / packaging
 .Python
 build/
 develop-eggs/
@@ -20,28 +21,45 @@ parts/
 sdist/
 var/
 wheels/
+share/python-wheels/
 *.egg-info/
 .installed.cfg
 *.egg
-
-# Virtual environments
-venv/
+MANIFEST
 .venv/
 env/
+venv/
 ENV/
+.pytest_cache/
+.ruff_cache/
+.mypy_cache/
+.coverage
+htmlcov/
 
-# Data and artifacts
+# Node & Frontend
+node_modules/
+.svelte-kit/
+package-lock.json
+
+# Rust & Tauri
+src-tauri/target/
+target/
+**/*.rs.bk
+Cargo.lock
+
+# Financial Data & Parquet Storage (Strictly Git-Ignored)
 data/
 *.parquet
-*.feather
+*.parquet.tmp
+*.duckdb
+*.duckdb.tmp
 *.db
-*.sqlite3
+*.sqlite
 
-# Logs and checkpoints
-*.log
-checkpoints/
-
-# IDE and OS
+# OS & IDE
 .DS_Store
-.vscode/
+Thumbs.db
 .idea/
+.vscode/
+*.swp
+*.swo
