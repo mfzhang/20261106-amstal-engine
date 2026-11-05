@@ -1,4 +1,4 @@
-# Amstal (QARE-MM v1.3)
+# Amstal Engine (QARE-MM v1.3)
 
 [![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
 [![Python: 3.11+](https://img.shields.io/badge/Python-3.11%2B-brightgreen.svg)](https://www.python.org/)
