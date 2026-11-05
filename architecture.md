@@ -1,13 +1,13 @@
 # Technical Architecture: Amstal System
-## Unified Architecture for `amstal-engine` (Quant Core) and `amstal-terminal` (Workstation)
+## Unified Architecture for `amstal-engine` (Quant Core v1.3) and `amstal-terminal` (Workstation)
 
 ---
 
-## 1. Architectural Vision & Topology
+## 1. Architectural Vision & End-to-End Topology
 
 **Amstal** couples an institutional quantitative research and risk engine (`amstal-engine`) with an ultra-responsive, Bloomberg-inspired desktop terminal (`amstal-terminal`).
 
-The system is designed to provide hedge-fund caliber data pipelines, mathematical alpha isolation, and multi-asset risk management on personal workstation hardware—specifically optimized for the fanless **Apple Silicon M5 MacBook Air (24 GB Unified Memory)**.
+The system is architected to provide hedge-fund caliber Point-in-Time (PIT) data pipelines, mathematical alpha isolation, and multi-asset risk management on personal workstation hardware—specifically optimized for the fanless **Apple Silicon M5 MacBook Air (24 GB Unified Memory)**.
 
 ```
 ┌──────────────────────────────────────────────────────────────────────────────────────────────────────────────────┐
@@ -16,8 +16,8 @@ The system is designed to provide hedge-fund caliber data pipelines, mathematica
 
                                       [ EXTERNAL MARKET DATA & FILINGS ]
          ┌───────────────────┬───────────────────┬───────────────────┬───────────────────┐
-         │ Polygon.io Stocks │ SEC EDGAR (XBRL)  │ FRED Macro        │ Tiingo / Yahoo    │
-         │ (Hourly/Daily)    │ (10-Q/K, Form 4)  │ (Yields, CPI)     │ (Historical EOD)  │
+         │ Polygon.io /      │ SEC EDGAR (XBRL)  │ FRED Macro        │ Historical Index  │
+         │ yfinance (Hybrid) │ (`edgartools`)    │ (Yields, VIX)     │ Joiners / Leavers │
          └─────────┬─────────┴─────────┬─────────┴─────────┬─────────┴─────────┬─────────┘
                    │                   │                   │                   │
                    ▼                   ▼                   ▼                   ▼
@@ -25,47 +25,47 @@ The system is designed to provide hedge-fund caliber data pipelines, mathematica
 │                                           AMSTAL ENGINE CORE (Python 3.11+)                                      │
 │                                                                                                                  │
 │  ┌────────────────────────────────────────────────────────────────────────────────────────────────────────────┐  │
-│  │ 1. INGESTION & DATA LAKEHOUSE LAYER                                                                        │  │
+│  │ 1. INGESTION & STATELESS LAKEHOUSE LAYER                                                                   │  │
 │  │   • Provider Plugins (OpenBB Pattern): Standardized Pydantic v2 Models (`StandardCandle`, `StandardXBRL`)   │  │
-│  │   • In-Process Columnar OLAP: DuckDB Embedded Engine                                                       │  │
-│  │   • Storage: Partitioned Apache Parquet Files (`data/processed/{domain}/{ticker}.parquet`)                 │  │
+│  │   • Stateless OLAP: In-memory `duckdb.connect(":memory:")` querying partitioned Apache Parquet files       │  │
+│  │   • Lock-Free Concurrency: Writes to `{ticker}.parquet.tmp` followed by POSIX atomic `os.replace()`        │  │
 │  │   • Point-in-Time (PIT) Validator: >16:00 EST rollover enforcement, `filed`-date fundamental alignment     │  │
 │  └─────────────────────────────────────────────────────┬──────────────────────────────────────────────────────┘  │
 │                                                        │                                                         │
 │                                                        ▼                                                         │
 │  ┌────────────────────────────────────────────────────────────────────────────────────────────────────────────┐  │
 │  │ 2. FEATURE ENGINEERING & ALPHA ISOLATION (QARE-MM v1.3)                                                    │  │
-│  │   • Rolling 60d OLS Beta Residualization: strips SPY and Sector ETF beta to yield pure epsilon_{i,t}       │  │
-│  │   • Intraday Microstructure Tensor (126, 15): Closing Power, Amihud Z-score, VWAP skew, Overnight/Day split│  │
+│  │   • 2-Stage Sequential OLS Orthogonalization: SPY -> Sector ETF_s -> Stock epsilon_{i,t} (No Collinearity) │  │
+│  │   • Dual-Mode Microstructure Tensor (126, 15): Full Hourly Bars + Automatic Daily-OHLCV Proxy Fallback     │  │
+│  │   • LightGBM Multi-Scale Summary (Batch, 105): 7 statistics per channel [t0, EWMA 5/21/63/126, Std, Slope] │  │
 │  │   • Alt-Data Catalyst Vector (12): Continuous exponential decay kernels (tau = 3d, 10d, 15d, 20d)          │  │
-│  │   • Dynamic Rolling Peer Graph (10 nodes): Monthly GICS peers + 5d lead-lag correlation (PyG GAT)          │  │
+│  │   • Dynamic Rolling Peer Graph (10 nodes): Monthly GICS peers + 5d lead-lag correlation (PyG GAT on CPU)   │  │
 │  │   • Macro Regime HMM: Forward-filtered 3-State Gaussian HMM (SPY + VIX), variance-sorted                   │  │
 │  └─────────────────────────────────────────────────────┬──────────────────────────────────────────────────────┘  │
 │                                                        │                                                         │
 │                                                        ▼                                                         │
 │  ┌────────────────────────────────────────────────────────────────────────────────────────────────────────────┐  │
 │  │ 3. MODELING, CALIBRATION & RISK SIZING                                                                     │  │
-│  │   • GBDT vs Neural Net Gating: Sample-Weighted LightGBM vs. Compact GRU-Attention (hidden_size=32)         │  │
-│  │   • Cross-Modal Fusion Net: Temporal series query + Alt-data attention + HMM Sigmoid Gate                  │  │
-│  │   • Purged Triple-Barrier Labeling: Dynamic ATR barriers with sample uniqueness weighting                  │  │
-│  │   • Temperature Scaling: Post-hoc NLL calibration on purged validation set                                 │  │
-│  │   • Multi-Outcome Fractional Kelly Sizer: Maximizes expected log-wealth net of 15 bps friction             │  │
+│  │   • GBDT vs Neural Net Gating: Sample-Weighted LightGBM (105d) vs. CPU-Pinned GRU-Attention (32d)          │  │
+│  │   • Modality-Masked Fusion Net: Locks `(B, 66)` across Phase 2 (Temporal Fallback) & Phase 3 (Cross-Modal) │  │
+│  │   • Purged Walk-Forward: 756d Train -> 10d Purge -> 126d Val -> 10d Purge -> 63d OOS Test (Quarterly)      │  │
+│  │   • Temperature Scaling: Post-hoc NLL calibration fit strictly on the 126-day purged validation fold       │  │
+│  │   • Configurable Kelly Sizer: Default `LONG_ONLY` Cash + Portfolio-Level L1 Gross Exposure Cap (<= 1.0)    │  │
 │  └─────────────────────────────────────────────────────┬──────────────────────────────────────────────────────┘  │
 │                                                        │                                                         │
 │                                                        ▼                                                         │
 │  ┌────────────────────────────────────────────────────────────────────────────────────────────────────────────┐  │
 │  │ 4. LOCAL ENGINE IPC SERVER                                                                                 │  │
-│  │   • Control Plane: Unix Domain Socket (UDS) / Windows Named Pipe listener                                  │  │
-│  │   • Streaming Broadcaster: Local WebSocket Server (`ws://127.0.0.1:8194`) with 100ms conflation           │  │
-│  │   • Zero-Copy Data Bridge: Apache Arrow Flight IPC / Shared Memory (mmap) for multi-year timeseries        │  │
+│  │   • Control Plane: Unix Domain Socket (UDS `/tmp/amstal.sock`) / Windows Named Pipe JSON-RPC 2.0 listener  │  │
+│  │   • Streaming Broadcaster: Local WebSocket Server (`ws://127.0.0.1:8194`) with 100ms conflation scheduler  │  │
 │  └─────────────────────────────────────────────────────┬──────────────────────────────────────────────────────┘  │
 └────────────────────────────────────────────────────────┼─────────────────────────────────────────────────────────┘
                                                          │
                          ┌───────────────────────────────┴───────────────────────────────┐
-                         │ LOCAL INTER-PROCESS COMMUNICATION (IPC) BUS                   │
+                         │ STREAMLINED LOCAL IPC & STORAGE BUS                           │
                          │  - Control Plane (UDS): Sub-millisecond commands & responses  │
                          │  - Stream (Port 8194): Real-time ticks, signals, regime alerts │
-                         │  - Bulk (Arrow Flight): Microsecond zero-copy matrix transfers│
+                         │  - Lock-Free Parquet: Stateless `:memory:` duckdb-rs in Tauri │
                          └───────────────────────────────┬───────────────────────────────┘
                                                          │
                                                          ▼
@@ -74,20 +74,20 @@ The system is designed to provide hedge-fund caliber data pipelines, mathematica
 │                                                                                                                  │
 │  ┌────────────────────────────────────────────────────────────────────────────────────────────────────────────┐  │
 │  │ TAURI 2.0 RUST BACKEND CORE                                                                                │  │
-│  │   • Engine Process Supervisor: Launches, health-checks (2s ping), and gracefully terminates engine daemon  │  │
+│  │   • Engine Process Supervisor: Spawns, health-checks (2s ping), and gracefully terminates engine daemon    │  │
 │  │   • UDS & WebSocket Client: Multiplexes incoming data streams to webview frontend                          │  │
+│  │   • Stateless DuckDB Reader: Queries immutable `.parquet` files directly in Rust (`:memory:`, <15ms)       │  │
 │  │   • Hardware Interface: Listens to QMK/VIA USB keyboard events (Starboard macros, Rotary encoder)          │  │
 │  └─────────────────────────────────────────────────────┬──────────────────────────────────────────────────────┘  │
 │                                                        │ Direct Native IPC                                       │
 │                                                        ▼                                                         │
 │  ┌────────────────────────────────────────────────────────────────────────────────────────────────────────────┐  │
-│  │ SVELTE 5 / SOLIDJS USER INTERFACE LAYER                                                                    │  │
-│  │   • 4-Panel Dockable Workspace (GoldenLayout / FlexLayout): Resizable, detachable multi-monitor tiles       │  │
+│  │ SVELTE 5 RUNES USER INTERFACE LAYER (Two-Tier Phased Rollout)                                              │  │
+│  │   • 4-Panel Reactive Split-Pane Grid (`paneforge` + CSS Grid with `$state` / `$derived` Runes)             │  │
 │  │   • Mnemonic Omnibar REPL: Autocomplete parser (`AAPL US <EQUITY> DES <GO>`) + fuzzy hybrid search (`cmdk`)│  │
-│  │   • Channel Linking System: Multi-color broadcast channels (Blue/Yellow/Green) syncing ticker across tiles  │  │
-│  │   • TradingView Lightweight Charts: GPU WebGL candlestick rendering, volume profile, VWAP bands            │  │
-│  │   • Point-in-Time Financial Viewer: Replicates Bloomberg `FA <GO>` from standardized XBRL statements       │  │
-│  │   • Local Copilot Tile: Ollama (`Llama-3.1-8B`) + LanceDB vector store for automated 10-K footnote queries │  │
+│  │   • Channel Linking System: Multi-color broadcast channels (Blue/Amber/Green/Red) syncing active security  │  │
+│  │   • Tier 1 Core (Phase 4A): `GP <GO>` (Charts), `PORT <GO>` (Kelly/Signals), `HMM <GO>`, `DES`, `FA <GO>`  │  │
+│  │   • Tier 2 Suite (Phase 4B): `SPLC <GO>` (Peer GAT), `EDGAR <GO>`, `NEWS`, `HP`, `ANR`, Copilot & QMK      │  │
 │  └────────────────────────────────────────────────────────────────────────────────────────────────────────────┘  │
 └──────────────────────────────────────────────────────────────────────────────────────────────────────────────────┘
 ```
@@ -96,63 +96,85 @@ The system is designed to provide hedge-fund caliber data pipelines, mathematica
 
 ## 2. Deep Terminal-Engine Integration Mechanics
 
-The terminal and engine communicate locally without relying on external cloud infrastructure. This guarantees sub-millisecond execution, complete data privacy, and zero latency overhead.
+The terminal and engine communicate locally without relying on external cloud infrastructure or redundant serialization layers.
 
-### 2.1 Communication Protocols & Ports
+### 2.1 Streamlined Communication Protocols & Storage Concurrency
 
 ```
 +──────────────────────────────────────────────────────────────────────────────────────────────────+
-|                                  LOCAL IPC CHANNEL TOPOLOGY                                      |
+|                                  LOCAL IPC & STORAGE TOPOLOGY                                    |
 +──────────────────────────┬─────────────────────────────┬─────────────────────────────────────────+
-| Channel Name             | Wire Transport              | Message Format / Protocol               |
+| Channel Name             | Wire / Storage Transport    | Message Format / Concurrency Rule       |
 +──────────────────────────┼─────────────────────────────┼─────────────────────────────────────────+
-| **Control IPC**          | Unix Domain Socket (UDS)    | Binary Framed JSON-RPC 2.0              |
-|                          | Path: `/tmp/amstal.sock`    | (Request / Synchronous Response)        |
+| **Control & RPC**        | Unix Domain Socket (UDS)    | Binary Framed JSON-RPC 2.0              |
+|                          | Path: `/tmp/amstal.sock`    | (Request / Synchronous Response, Ping)  |
 +──────────────────────────┼─────────────────────────────┼─────────────────────────────────────────+
-| **Market Data Feed**     | Local WebSocket             | Multiplexed UTF-8 JSON / Protobuf       |
-|                          | URL: `ws://127.0.0.1:8194`  | (Pub/Sub: `ticker`, `regime`, `signals`)|
+| **Market Data Feed**     | Local WebSocket             | Multiplexed UTF-8 JSON                  |
+|                          | URL: `ws://127.0.0.1:8194`  | (100ms Conflated Pub/Sub: `ticker`,     |
+|                          |                             | `regime`, `signals`, `alerts`)          |
 +──────────────────────────┼─────────────────────────────┼─────────────────────────────────────────+
-| **High-Volume Analytics**| Apache Arrow Flight IPC     | Zero-Copy Arrow RecordBatches           |
-|                          | Port: `localhost:8195`      | (Direct memory-to-memory dataframes)    |
+| **Lock-Free Analytical** | Stateless `:memory:`        | Zero-Lock Direct Parquet Queries        |
+| **Storage Bridge**       | `duckdb-rs` & Python DuckDB | Python writes `.parquet.tmp` -> POSIX   |
+|                          | over `data/processed/`      | atomic `os.replace()` for safe reads    |
 +──────────────────────────┼─────────────────────────────┼─────────────────────────────────────────+
 ```
 
-### 2.2 Sequence Diagram: Mnemonic Command Execution
+### 2.2 Why Stateless `:memory:` DuckDB + Atomic Rename?
+A persistent `.duckdb` database file enforces a single-writer OS file lock: if `amstal-engine` (Python) holds write access to `amstal.duckdb`, `amstal-terminal` (Tauri Rust) cannot open it concurrently without throwing `IO Error: Could not set lock on file`. Furthermore, overwriting `.parquet` files in-place during a concurrent read corrupts the Parquet footer.
+
+Amstal solves both failure modes deterministically:
+1. **Zero `.duckdb` Lock Files**: Both Python and Tauri Rust open ephemeral `duckdb.connect(":memory:")` sessions and query `.parquet` files directly via `SELECT * FROM read_parquet(...)`.
+2. **Atomic POSIX Replacement**:
+   ```python
+   import os
+   from pathlib import Path
+
+   def atomic_write_parquet(df, target_path: Path) -> None:
+       tmp_path = target_path.with_suffix(".parquet.tmp")
+       df.write_parquet(tmp_path)
+       os.replace(tmp_path, target_path)  # Atomic POSIX inode swap
+   ```
+   Any concurrent `duckdb-rs` query in Tauri either reads the complete previous inode or the complete new inode—never a partial file.
+
+### 2.3 Sequence Diagram: Mnemonic Command & Analytical Query Execution
 
 ```
-User (Keyboard)         Terminal (UI)          Tauri (Rust)          Engine (Python)         DuckDB / Storage
-      │                      │                      │                       │                       │
-      │ Type "NVDA US EQ FA" │                      │                       │                       │
-      │ ───► <GO> (Enter)    │                      │                       │                       │
-      │                      │ Parse Mnemonic       │                       │                       │
-      │                      │ ───────────────────► │                       │                       │
-      │                      │                      │ UDS Request           │                       │
-      │                      │                      │ ────────────────────► │                       │
-      │                      │                      │                       │ Resolve PIT Statements│
-      │                      │                      │                       │ ────────────────────► │
-      │                      │                      │                       │                       │ Parquet Read
-      │                      │                      │                       │ ◄──────────────────── │ (< 5ms)
-      │                      │                      │                       │ Normalize Schema      │
-      │                      │                      │ UDS Response (JSON)   │                       │
-      │                      │                      │ ◄──────────────────── │                       │
-      │                      │ Rust Emit Event      │                       │                       │
-      │                      │ ◄─────────────────── │                       │                       │
-      │ Render 10-Yr Grid    │                      │                       │                       │
-      │ ◄─────────────────── │                      │                       │                       │
+User (Keyboard)         Terminal (Svelte 5)    Tauri (Rust Core)      Engine (Python UDS)    Parquet Lakehouse
+      │                         │                      │                       │                     │
+      │ Type "NVDA US EQ FA"    │                      │                       │                     │
+      │ ───► <GO> (Enter)       │                      │                       │                     │
+      │                         │ Parse Mnemonic AST   │                       │                     │
+      │                         │ ───────────────────► │                       │                     │
+      │                         │                      │ [If Cached in Lakehouse: Direct Read]       │
+      │                         │                      │ ──────────────────────────────────────────► │
+      │                         │                      │                       │     :memory: DuckDB │
+      │                         │                      │ ◄────────────────────────────────────────── │ (< 5ms)
+      │                         │                      │                       │                     │
+      │                         │                      │ [If Uncached / Live Compute Required]       │
+      │                         │                      │ UDS JSON-RPC Request  │                     │
+      │                         │                      │ ────────────────────► │                     │
+      │                         │                      │                       │ Fetch & Compute PIT │
+      │                         │                      │                       │ Atomic os.replace() │
+      │                         │                      │                       │ ──────────────────► │
+      │                         │                      │ UDS JSON Response     │                     │
+      │                         │                      │ ◄──────────────────── │                     │
+      │                         │ Update $state Store  │                       │                     │
+      │                         │ ◄─────────────────── │                       │                     │
+      │ Render 10-Yr PIT Grid   │                      │                       │                     │
+      │ ◄────────────────────── │                      │                       │                     │
 ```
 
-### 2.3 Real-Time Tick Conflation & UI Frame Rendering
-Human perception cannot digest raw ticks updating at 5,000 messages/second. Furthermore, rendering every tick locks the UI event loop.
-* **Engine Ingestion**: Ingests streaming market trades and quotes asynchronously into an in-memory ring buffer.
-* **100ms Conflation Loop**: Every 100 milliseconds, the engine computes the net state change (`last_price`, `bid`, `ask`, `cumulative_volume`, `vwap_deviation`) and broadcasts a single conflated frame over `ws://127.0.0.1:8194`.
-* **Terminal Dirty-Rect Rendering**: The Svelte UI updates its reactive stores; WebGL canvas charts repaint at 60 FPS without DOM thrashing.
+### 2.4 Real-Time Tick Conflation & 60 FPS UI Rendering
+* **Engine Ring Buffer**: Ingests streaming market trades and quotes asynchronously.
+* **100ms Conflation Scheduler**: Every 100 milliseconds, the engine aggregates net state changes (`last_price`, `bid`, `ask`, `cumulative_volume`, `vwap_deviation`) and broadcasts a single conflated frame over `ws://127.0.0.1:8194`.
+* **Svelte 5 Runes Reactivity**: Fine-grained `$state` signals update only modified DOM text nodes and WebGL canvas buffers at 60 FPS without virtual-DOM diffing overhead.
 
 ---
 
 ## 3. Reverse-Engineered Bloomberg Architecture
 
 ### 3.1 Mnemonic Command Grammar & Lexical Parser
-Bloomberg's core navigation relies on an expressive Domain-Specific Language (DSL). Amstal recreates this via a deterministic lexer and state machine:
+Amstal recreates Bloomberg's Reverse Polish Notation (RPN) command workflow via a deterministic lexer and state machine:
 
 ```
                ┌──────────┐
@@ -161,7 +183,7 @@ Bloomberg's core navigation relies on an expressive Domain-Specific Language (DS
                     │
                     ▼
            ┌──────────────────┐
-           │   MARKET CODE    │ (Optional: "US", "LN", "GY")
+           │   MARKET CODE    │ (Optional: "US", "LN", "GY" — defaults to "US")
            └────────┬─────────┘
                     │
                     ▼
@@ -171,12 +193,12 @@ Bloomberg's core navigation relies on an expressive Domain-Specific Language (DS
                     │
                     ▼
            ┌──────────────────┐
-           │     MNEMONIC     │ (e.g., "DES", "FA", "HP", "GP", "PORT", "HMM")
+           │     MNEMONIC     │ ("GP", "PORT", "HMM", "DES", "FA", "SPLC", "EDGAR", "NEWS", "HP", "ANR")
            └────────┬─────────┘
                     │
                     ▼
            ┌──────────────────┐
-           │    PARAMETERS    │ (e.g., "QUARTERLY", "2024", "10D")
+           │    PARAMETERS    │ (Optional: "QUARTERLY", "10Y", "LONG_ONLY")
            └────────┬─────────┘
                     │
                     ▼
@@ -185,159 +207,92 @@ Bloomberg's core navigation relies on an expressive Domain-Specific Language (DS
                └──────────┘
 ```
 
-#### Lexer State Machine Implementation
-* When the user inputs characters into the Omnibar, the lexer tokenizes strings on whitespace.
-* If a token matches a registered asset-class key (`<EQUITY>`, `<INDEX>`), it sets the execution context.
-* If the terminal token is `<GO>` (or `Enter` keypress), the parser produces an AST payload dispatched via IPC:
-  ```json
-  {
-    "action": "EXECUTE_MNEMONIC",
-    "security": { "ticker": "AAPL", "market": "US", "asset_class": "EQUITY" },
-    "command": "FA",
-    "params": { "view": "STANDARDIZED", "horizon": "10Y" }
-  }
-  ```
+### 3.2 Two-Tier Module Architecture
 
-### 3.2 Canonical Bloomberg Modules
+#### Tier 1: Core Quantitative Workstation (Phase 4A)
+1. **`GP <GO>` (Graph Price & Microstructure)**:
+   * TradingView Lightweight Charts (WebGL) with multi-timeframe candlesticks, intraday VWAP, dynamic Triple-Barrier levels ($+2\sigma_{\text{ATR}} / -1\sigma_{\text{ATR}}$), and an overnight-vs-intraday return decomposition sub-pane.
+2. **`PORT <GO>` / `QARE <GO>` (Portfolio & Kelly Allocation Sizer)**:
+   * Displays real-time QARE-MM v1.3 signal breakdown across all 11 factor channels, Temperature-calibrated probabilities ($\hat{p}_{\text{buy}}, \hat{p}_{\text{hold}}, \hat{p}_{\text{sell}}$), unconstrained single-stock Kelly fraction, and $L_1$-normalized portfolio weights ($w_i$).
+3. **`HMM <GO>` (Macro Volatility Regime Monitor)**:
+   * Visualizes forward-filtered 3-state Gaussian HMM probabilities:
+     * **State 0 (Green)**: Low-Vol Bull Market ($\Sigma_{0, rr}$ lowest variance).
+     * **State 1 (Amber)**: Sideways / Transitional Volatility ($\Sigma_{1, rr}$ medium variance).
+     * **State 2 (Red)**: High-Vol Crash / Panic ($\Sigma_{2, rr}$ highest variance).
+4. **`DES <GO>` (Security Master Profile)**:
+   * Header with Ticker, Name, Primary Exchange, CIK, FIGI, GICS Sector/Sub-Industry, 60-day orthogonalized market beta ($\hat{\beta}_{\text{mkt}}$) and sector beta ($\hat{\beta}_{\text{sec}}$), ADV, and Point-in-Time Item 1 business summary.
+5. **`FA <GO>` (Point-in-Time Financial Analysis)**:
+   * 10-year quarterly and annual Income Statement, Balance Sheet, and Cash Flow tables stamped strictly by SEC XBRL `filed` acceptance date (preventing back-dated restatement look-ahead).
 
-1. **`DES <GO>` (Security Description Factsheet)**:
-   * Header: Ticker, Name, Primary Exchange, CIK, GICS Sector/Sub-Industry, FIGI identifier.
-   * Market Snapshot: Prior Close, Open, 52-week High/Low, Beta (60d vs SPY), Shares Outstanding, Market Cap.
-   * Business Profile: Sourced Point-in-Time from SEC 10-K Item 1 Business summary.
-2. **`FA <GO>` (Financial Analysis)**:
-   * 10-year horizontal and vertical Point-in-Time financial statement analysis.
-   * Balance Sheet, Income Statement, and Cash Flow tables standardized from SEC EDGAR XBRL facts.
-   * Restatement-safe: Historical periods display values as originally filed on that date, preventing back-dated restatement bias.
-3. **`GP <GO>` & `HP <GO>` (Price Charts & Historical Tables)**:
-   * Candlesticks with multi-timeframe resolution (1m, 5m, 1h, 1d).
-   * Overlays: Intraday VWAP, 20-day/60-day moving averages, Parkinson volatility envelopes.
-   * Microstructure Pane: Overnight return bar vs. Intraday session bar decomposition.
-4. **`HMM <GO>` (Macro Volatility Regime Monitor)**:
-   * Displays the current forward-filtered Gaussian HMM state:
-     * **State 0 (Green)**: Low-Vol Bull Market ($\sigma_{\text{market}} < 12\%$).
-     * **State 1 (Yellow)**: Sideways / Normal Volatility ($\sigma_{\text{market}} \approx 12–22\%$).
-     * **State 2 (Red)**: High-Vol Crash / Panic ($\sigma_{\text{market}} > 22\%$).
-   * Historical regime timeline plotting market transitions without backward-looking smoothing.
-5. **`PORT <GO>` & `RISK <GO>` (Portfolio Risk & Kelly Sizing)**:
-   * Multi-Outcome Fractional Kelly sizing recommendations net of 15 bps friction.
-   * Value-at-Risk (VaR 95% / 99%), Expected Shortfall, and single-stock 10% concentration limits.
+#### Tier 2: Alt-Data, Graph & Hardware Suite (Phase 4B)
+6. **`SPLC <GO>` (Dynamic Rolling Peer Graph)**:
+   * Force-directed interactive graph rendering the 10-node subgraph ($v_0$ target, $v_1 \dots v_4$ GICS peers, $v_5 \dots v_8$ 5-day lead-lag cross-correlation peers, $v_9$ Sector ETF) and GAT attention weights.
+7. **`EDGAR <GO>` (SEC 10-Q/10-K Redlines & Form 4 Clusters)**:
+   * Side-by-side `difflib` redline viewer for Item 1A Risk Factors and Item 7 MD&A, scored by `Llama-3.1-8B`, alongside Form 4 open-market cluster buying/selling tables (filtering out Rule 10b5-1 scheduled trades).
+8. **`NEWS <GO>` (FinBERT Sentiment Stream)**:
+   * Real-time headline feed with FinBERT sentiment scores and exponential decay curves ($\tau = 3.0\text{d}$).
+9. **`HP <GO>` & `ANR <GO>`**:
+   * Tabular historical prices with overnight/intraday splits (`HP`) and analyst consensus target distributions (`ANR`).
+10. **Local Copilot & Starboard QMK Hardware**:
+    * Embedded Ollama + LanceDB RAG assistant and QMK/VIA custom keyboard hid listener (`F1–F10` asset macros, green `<GO>`, red `<CANCEL>`, rotary candlestick scrubber).
 
-### 3.3 Starboard Hardware Integration (QMK / VIA)
-Amstal interfaces directly with USB HID devices configured via QMK firmware:
-* **Asset Class Hotkeys**: `F1`–`F7` configured as raw USB HID usage codes that the Tauri Rust client maps to asset-class selector tokens (`<EQUITY>`, `<CORP>`, `<GOVT>`, etc.).
-* **Action Buttons**: Distinct green Cherry MX switch for `<GO>` (`KC_ENTER`) and red switch for `<CANCEL>` (`KC_ESCAPE`).
-* **Encoder Rotary Dial**: Emits custom incremental step codes captured by Tauri to scrub candlestick chart cursors with microsecond fluidity.
-
-### 3.4 4-Panel Dockable Workspace with Color-Coded Linking
-* Workspace consists of 4 independent tiles (Panel 1: Top-Left, Panel 2: Top-Right, Panel 3: Bottom-Left, Panel 4: Bottom-Right).
-* **Color Channels**: Each tile displays a color-linking selector (Blue, Amber, Green, Purple).
-* When Panel 1 and Panel 2 are set to Blue, changing the security in Panel 1 sends an internal event across the Svelte store bus:
-  `channelStore.publish('BLUE', { ticker: 'MSFT', market: 'US', assetClass: 'EQUITY' })`.
-  Panel 2 receives the event and immediately refreshes its data view for `MSFT`.
+### 3.3 4-Panel Reactive Split-Pane Grid (`paneforge` + Svelte 5 Runes)
+Instead of legacy imperative DOM layout managers (such as GoldenLayout) that conflict with Svelte 5's reactive lifecycle, `WorkspaceGrid.svelte` uses `paneforge` and CSS Grid backed by Svelte 5 runes (`$state`, `$derived`):
+* **Color-Channel Synchronization**:
+  Each of the 4 panels binds to a reactive channel store (`BLUE | AMBER | GREEN | RED | UNLINKED`). Executing `NVDA US <EQUITY> GP <GO>` in a Blue-linked panel mutates `channelState.BLUE.ticker = "NVDA"`, automatically triggering reactive re-fetches in all other Blue-linked panels.
 
 ---
 
 ## 4. Reverse-Engineered OpenBB Architecture
 
-### 4.1 Extensible Provider Architecture
-`amstal-engine` structures its data ingestion around OpenBB's modular provider pattern:
+### 4.1 Extensible Provider Pattern
+`amstal-engine` isolates external vendor APIs behind an abstract `BaseProvider` interface:
 
 ```
-                      ┌─────────────────────────┐
-                      │   BaseProvider (ABC)    │
-                      ├─────────────────────────┤
-                      │ + fetch_candles()       │
-                      │ + fetch_fundamentals()  │
-                      │ + fetch_insiders()      │
-                      │ + fetch_macro()         │
-                      └────────────┬────────────┘
-                                   │
-         ┌─────────────────────────┼─────────────────────────┐
-         ▼                         ▼                         ▼
-┌───────────────────┐    ┌───────────────────┐    ┌───────────────────┐
-│  PolygonProvider  │    │   EdgarProvider   │    │    FredProvider   │
-├───────────────────┤    ├───────────────────┤    ├───────────────────┤
-│ • Hourly/Daily    │    │ • XBRL CompanyFacts│    │ • 10Y/2Y Yields   │
-│ • Real-time Quotes│    │ • Form 4 XML Insiders│  │ • CPI, M2, GDP    │
-│ • Trades/VWAP     │    │ • 10-Q/K Redlines │    │ • Federal Funds   │
-└───────────────────┘    └───────────────────┘    └───────────────────┘
+                      ┌─────────────────────────────────┐
+                      │        BaseProvider (ABC)       │
+                      ├─────────────────────────────────┤
+                      │ + fetch_candles()               │
+                      │ + fetch_fundamentals_pit()      │
+                      │ + fetch_form4_insiders()        │
+                      │ + fetch_macro_series()          │
+                      └────────────────┬────────────────┘
+                                       │
+         ┌─────────────────────────────┼─────────────────────────────┐
+         ▼                             ▼                             ▼
+┌───────────────────────┐    ┌───────────────────────┐    ┌───────────────────────┐
+│ PolygonYFinanceHybrid │    │     EdgarProvider     │    │      FredProvider     │
+├───────────────────────┤    ├───────────────────────┤    ├───────────────────────┤
+│ • Polygon Hourly/Daily│    │ • `edgartools` Engine │    │ • 10Y/2Y Yields       │
+│ • Automatic yfinance  │    │ • US-GAAP Tag Hierarchy│   │ • VIX, CPI, M2, GDP   │
+│   Daily Proxy Fallback│    │ • Form 4 XML & 10-Q/K │    │ • Fed Funds Rate      │
+└───────────────────────┘    └───────────────────────┘    └───────────────────────┘
 ```
 
-### 4.2 Standardized Pydantic v2 Schemas
-Every provider transforms raw vendor responses into normalized Pydantic models:
+### 4.2 Deterministic US-GAAP XBRL Tag Fallback Hierarchy (`sec_edgar.py`)
+Companies frequently switch XBRL taxonomy tags across reporting years. To construct unbroken 10-year Point-in-Time fundamental series for `FA <GO>` and Peer GAT nodes (`Earnings Yield`, `YoY Revenue Growth`, `Operating Margin`), `sec_edgar.py` integrates `edgartools` with a strict tag resolution hierarchy:
+* **Revenue**: `RevenueFromContractWithCustomerExcludingAssessedTax` $\to$ `Revenues` $\to$ `SalesRevenueNet` $\to$ `SalesRevenueGoodsNet`
+* **Operating Income**: `OperatingIncomeLoss` $\to$ `IncomeLossFromContinuingOperationsBeforeIncomeTaxesExtraordinaryItemsNoncontrollingInterest`
+* **Diluted EPS**: `EarningsPerShareDiluted` $\to$ `IncomeLossFromContinuingOperationsPerDilutedShare`
+* **Point-in-Time Rule**: Every fact is indexed strictly by its SEC `filed` acceptance timestamp (never back-dated to fiscal period `end` date). Filings accepted after `16:00 EST` on day $t$ are shifted strictly to $t+1$.
 
-```python
-from pydantic import BaseModel, Field
-from datetime import datetime, date
-from typing import Optional
-
-class StandardCandle(BaseModel):
-    timestamp: datetime
-    open: float
-    high: float
-    low: float
-    close: float
-    volume: float
-    vwap: Optional[float] = None
-
-class StandardIncomeStatement(BaseModel):
-    ticker: str
-    period_end_date: date
-    filing_date: date = Field(..., description="Point-in-Time Acceptance Date")
-    revenue: float
-    gross_profit: float
-    operating_income: float
-    net_income: float
-    eps_diluted: float
-```
-
-### 4.3 DuckDB Columnar Lakehouse Storage
-Instead of managing heavy external database servers (PostgreSQL or ClickHouse), Amstal embeds **DuckDB**:
-* Historical quotes and filings are partitioned on disk:
-  ```
-  data/
-  ├── processed/
-  │   ├── prices/
-  │   │   ├── AAPL.parquet
-  │   │   └── NVDA.parquet
-  │   ├── fundamentals/
-  │   │   └── xbrl_facts.parquet
-  │   └── features/
-  │       └── cross_sectional_matrix.parquet
-  ```
-* DuckDB runs vectorized SQL queries directly over Parquet files in memory:
-  ```sql
-  SELECT timestamp, close, volume,
-         (close - open) / open AS intraday_return
-  FROM read_parquet('data/processed/prices/NVDA.parquet')
-  WHERE timestamp >= '2020-01-01'
-  ORDER BY timestamp ASC;
-  ```
-  Execution completes in **under 15 ms** for 20 years of data.
-
-### 4.4 Local Agentic Financial Copilot
-Amstal incorporates an autonomous financial research agent running locally:
-1. **Model**: `Llama-3.1-8B-Instruct` running on Apple Silicon via **Ollama** (leveraging Metal acceleration).
-2. **Vector Store**: **LanceDB** embedded database indexing:
-   * Item 1A (Risk Factors) from 10-K filings.
-   * Item 7 (MD&A) operational commentary.
-   * Quarterly earnings call transcripts.
-3. **Structured Function Calling**:
-   * The copilot can execute engine actions:
-     * `get_peer_analysis(ticker="CRWD")`
-     * `get_macro_regime()`
-     * `calculate_kelly_allocation(ticker="NVDA")`
+### 4.3 Hybrid LLM Backfill vs. Local Ongoing Inference (`sec_diff.py`)
+* **Historical Seed (One-Time Batch Backfill)**: Scoring `difflib` redlines for ~8,000 historical 10-Q/10-K filings (`250 stocks * 4 quarters * 8 years`) locally on a fanless M5 Air would require ~40 hours of sustained compute. `sec_diff.py` includes an async batch adapter for OpenAI-compatible inference endpoints (Groq / DeepInfra / Together running `Llama-3.1-8B-Instruct` at `temperature=0.0`) that materializes the historical Parquet cache in <45 minutes.
+* **Live & Ongoing Inference (100% Local Ollama)**: Once seeded, all new daily/quarterly SEC filings and interactive terminal Copilot prompts execute 100% locally via **Ollama** (`llama3.1:8b` Q4_K_M / Q8_0) with zero external API dependency.
 
 ---
 
-## 5. Machine Learning & Quantitative Modeling Pipeline (QARE-MM v1.3)
+## 5. Quantitative & Machine Learning Pipeline (QARE-MM v1.3)
 
-### 5.1 Idiosyncratic Alpha Isolation
-Raw stock returns are approximately 65% macro and sector beta. To isolate idiosyncratic alpha:
-$$\epsilon_{i, t} = r_{i, t} - \left(\hat{\beta}_{i, \text{mkt}, t-1} \cdot r_{\text{SPY}, t} + \hat{\beta}_{i, \text{sec}, t-1} \cdot r_{\text{ETF}_s, t}\right)$$
-Betas are estimated via rolling 60-day OLS on strictly historical data $[t-60, t-1]$.
+### 5.1 Idiosyncratic Alpha Isolation (2-Stage Sequential OLS Orthogonalization)
+To eliminate collinearity between `SPY` and GICS Sector ETFs ($\rho \ge 0.80$), rolling 60-day betas are estimated over strictly historical windows $[t-60, t-1]$ in two sequential stages:
+1. **Stage 1 (Sector Orthogonalization against SPY)**:
+   $$r_{\text{ETF}_s, t} = \hat{\alpha}_{s, t-1} + \hat{\beta}_{s, \text{mkt}, t-1} \cdot r_{\text{SPY}, t} + \nu_{s, t} \implies r_{\text{ETF}_s, \perp, t} = \nu_{s, t}$$
+2. **Stage 2 (Stock Residualization against SPY and Orthogonal Sector)**:
+   $$\epsilon_{i, t} = r_{i, t} - \left(\hat{\alpha}_{i, t-1} + \hat{\beta}_{i, \text{mkt}, t-1} \cdot r_{\text{SPY}, t} + \hat{\beta}_{i, \text{sec}, t-1} \cdot r_{\text{ETF}_s, \perp, t}\right)$$
+By construction, $\text{Cov}(r_{\text{SPY}}, r_{\text{ETF}_s, \perp}) = 0$, guaranteeing stable regression betas and pure idiosyncratic residuals $\epsilon_{i, t}$.
 
-### 5.2 Tensor Feature Representations
+### 5.2 Multi-Modal Tensor Topology & Phase 2/3 Modality Masking
 
 ```
                                   [ MULTI-MODAL INPUT TENSORS ]
@@ -345,45 +300,47 @@ Betas are estimated via rolling 60-day OLS on strictly historical data $[t-60, t
          ┌──────────────────────────────────────┼──────────────────────────────────────┐
          ▼                                      ▼                                      ▼
 ┌─────────────────────────────┐        ┌─────────────────────────────┐        ┌─────────────────────────────┐
-│ 1. Time-Series Microstructure│        │ 2. SEC & Alt-Data Vector    │        │ 3. Dynamic Rolling Peer Graph│
+│ 1. Dual-Mode Microstructure │        │ 2. SEC & Alt-Data Vector    │        │ 3. Dynamic Rolling Peer Graph│
 │ Shape: (Batch, 126, 15)     │        │ Shape: (Batch, 12)          │        │ Nodes: (Total_Nodes, 10)    │
 ├─────────────────────────────┤        ├─────────────────────────────┤        ├─────────────────────────────┤
-│ • Residual Momentum (5/20/60)│       │ • Decayed FinBERT Sentiment │        │ • Node 0: Target Stock      │
-│ • Overnight/Intraday return │        │ • Decayed Form 4 Insider Buy│        │ • Nodes 1-4: GICS Peers     │
-│ • Closing Power (auction)   │        │ • Decayed PEAD Shock        │        │ • Nodes 5-8: Lead-Lag Peers │
-│ • Amihud Illiquidity Z-Score│        │ • Decayed 10-Q Item 1A Diff │        │ • Node 9: Sector ETF        │
-│ • Close-to-VWAP Deviation   │        │ • Staleness Age Scalars     │        │ • PIT XBRL Fundamental Facts│
-│ • Realized Hourly Volatility│        │ • Modality Missingness Masks│        │ • 60d Beta + Lead-Lag Coeff │
+│ • 15 Rank-Normalized Chans  │        │ • FinBERT, Form 4, PEAD,    │        │ • Node 0: Target Stock      │
+│ • Hourly Full OR Daily Proxy│        │   10-Q Redline Diffs        │        │ • Nodes 1-4: GICS Peers     │
+│ • Also summarized into      │        │ • Staleness Age Scalars     │        │ • Nodes 5-8: Lead-Lag Peers │
+│   (Batch, 105) for LightGBM │        │ • Missingness Masks (9..11) │        │ • Node 9: Sector ETF        │
 └──────────────┬──────────────┘        └──────────────┬──────────────┘        └──────────────┬──────────────┘
                │                                      │                                      │
                ▼                                      ▼                                      ▼
        ┌───────────────┐                      ┌───────────────┐                      ┌───────────────┐
        │ 1-Layer GRU   │                      │ Linear(12->32)│                      │ 2-Layer PyG   │
-       │ + Self-Attn   │                      │ + LayerNorm   │                      │ GAT Layer     │
-       │ (hidden = 32) │                      │ (hidden = 32) │                      │ (hidden = 32) │
+       │ + 2H Self-Attn│                      │ + LayerNorm   │                      │ GAT Layer     │
+       │ (CPU, d = 32) │                      │ (CPU, d = 32) │                      │ (CPU, d = 32) │
        └───────┬───────┘                      └───────┬───────┘                      └───────┬───────┘
                │ (B, 126, 32)                         │ (B, 1, 32)                           │ (B, 32)
                └──────────────────────┬───────────────┘                                      │
                                       ▼                                                      │
                        ┌─────────────────────────────┐                                       │
-                       │ Cross-Modal Attention       │                                       │
-                       │ Query: Alt-Data (B, 1, 32)  │                                       │
-                       │ Key/Val: Temporal (B,126,32)│                                       │
+                       │ Modality-Masked Fusion      │                                       │
+                       │ • Phase 2 (Masks=0):        │                                       │
+                       │   Temporal Pooled (B, 32)   │                                       │
+                       │ • Phase 3 (Masks=1):        │                                       │
+                       │   Cross-Modal Attn (B, 32)  │                                       │
                        └──────────────┬──────────────┘                                       │
                                       │ (B, 32)                                              │
                                       └──────────────────────┬───────────────────────────────┘
                                                              ▼
-                                                    Concat(32 + 32 + 2)
-                                                        = (B, 66)
+                                      Concat: [ (B, 32) || (B, 32) || [D+, D-] (B, 2) ]
+                                                         = (B, 66)
                                                              │
   [ Macro Volatility Regime HMM ]                            ▼
   Shape: (Batch, 3) ────────────────────────────────► ┌─────────────┐
                                                       │ Sigmoid Gate│
+                                                      │ Linear(3,66)│
                                                       └──────┬──────┘
                                                              │ (B, 66)
                                                              ▼
                                                       ┌─────────────┐
                                                       │ Head: 66->32│
+                                                      │ LayerNorm   │
                                                       │ Linear-> 3  │
                                                       └──────┬──────┘
                                                              │ Raw Logits (B, 3)
@@ -392,51 +349,49 @@ Betas are estimated via rolling 60-day OLS on strictly historical data $[t-60, t
                                                       │ Temperature │
                                                       │ Scaler: z/T │
                                                       └──────┬──────┘
-                                                             │ Calibrated Probabilities
+                                                             │ Calibrated Probabilities (B, 3)
                                                              ▼
-                                                      Multi-Outcome Kelly Sizer
+                                               L1-Normalized Multi-Outcome Kelly Sizer
 ```
 
-### 5.3 Purged Triple-Barrier Labeling & Sample Uniqueness
-* **Dynamic Barriers**: Upper $+2.0 \cdot \sigma_{\text{ATR}}$, Lower $-1.0 \cdot \sigma_{\text{ATR}}$, Vertical $H = 10\text{ days}$.
-* **Calendar-Date Purging**: Every observation resolving after the training fold cutoff date $D_{\text{train}}$ is purged across all 250 tickers to prevent forward information leakage.
-* **Sample Uniqueness Weighting**:
-  $$u_{i, t} = \frac{1}{t_{\text{end}} - t + 1} \sum_{\tau = t}^{t_{\text{end}}} \frac{1}{c_{i, \tau}}$$
-  where $c_{i,\tau}$ represents concurrent overlapping trade labels on day $\tau$.
+### 5.3 Purged Walk-Forward Cross-Validation Geometry (`walk_forward.py`)
+Every walk-forward fold strictly enforces two 10-trading-day purge buffers ($t_{\text{end}} \le D_{\text{cutoff}}$ across all 250 tickers) to prevent overlapping triple-barrier labels from leaking across train, validation, and out-of-sample test windows:
 
-### 5.4 Multi-Outcome Fractional Kelly Position Sizing
-Solves the continuous log-wealth optimization net of 15 bps round-trip transaction friction ($c = 0.0015$):
-$$\max_{f \in [0, f_{\max}]} \left[ \hat{p}_{\text{buy}} \ln(1 + f (b_{\text{upper}} - c)) + \hat{p}_{\text{sell}} \ln(1 - f (|b_{\text{lower}}| + c)) + \hat{p}_{\text{hold}} \ln(1 + f (\bar{r}_{\text{vert}} - c)) \right]$$
-* Scaled by regime multiplier $\kappa \in [0.25, 0.50]$ (Quarter/Half Kelly).
-* Hard single-stock portfolio allocation cap: $10\%$ ($15\%$ absolute maximum limit).
+```
+┌───────────────────────────┬──────────────┬───────────────────────────┬──────────────┬───────────────────────────┐
+│    ROLLING TRAIN FOLD     │ PURGE BUFFER │   VALIDATION FOLD (NLL)   │ PURGE BUFFER │    OOS TEST FOLD (STEP)   │
+│   3 Years (756 Trading D) │  10 Trad. D  │  6 Months (126 Trading D) │  10 Trad. D  │   3 Months (63 Trading D) │
+├───────────────────────────┼──────────────┼───────────────────────────┼──────────────┼───────────────────────────┤
+│ • Fit LightGBM (105ch)    │ • Drop all   │ • Early Stopping          │ • Drop all   │ • Strictly Out-of-Sample  │
+│ • Fit GRU/GAT (32d)       │   samples w/ │ • Fit Ensemble Weights    │   samples w/ │   Evaluation (Rank IC,    │
+│ • Fit 3-State Gaussian HMM│   t_end > D1 │ • Fit Temp Scaler (T > 0) │   t_end > D2 │   Brier, Net-of-15bps PnL)│
+└───────────────────────────┴──────────────┴───────────────────────────┴──────────────┴───────────────────────────┘
+```
+
+### 5.4 Configurable Execution Mode & Portfolio-Level $L_1$ Kelly Normalization (`kelly_engine.py`)
+1. **Single-Stock Fractional Kelly**:
+   Solves the expected log-wealth objective net of 15 bps round-trip friction ($c = 0.0015$), scaled by regime multiplier $\kappa \in [0.25, 0.50]$ and capped at $f_{\max} = 0.10$:
+   $$\max_{f \in [0, f_{\max}]} \left[ \hat{p}_{\text{buy}} \ln(1 + f (b_{\text{upper}} - c)) + \hat{p}_{\text{sell}} \ln(1 - f (|b_{\text{lower}}| + c)) + \hat{p}_{\text{hold}} \ln(1 + f (\bar{r}_{\text{vert}} - c)) \right]$$
+2. **Execution Mode Switch**:
+   * `LONG_ONLY` (Default): Constrains $f_i \in [0, 0.10]$. `Underperform/Sell` signals exit long positions to cash ($0.0\%$).
+   * `LONG_SHORT` (Diagnostic Stat-Arb): Evaluates cross-sectional Rank IC and dollar-neutral long/short performance in `metrics.py`.
+3. **Portfolio-Level $L_1$ Gross Exposure Normalization**:
+   $$w_i = \frac{f_i^* \cdot \kappa}{\max\left(1.0, \sum_{j=1}^N |f_j^* \cdot \kappa|\right)} \implies \sum_{i=1}^N |w_i| \le 1.0$$
 
 ---
 
-## 6. Apple Silicon M5 Air (24 GB) Thermal & Runtime Budget
+## 6. Apple Silicon M5 Air (24 GB) Hardware & Runtime Constraints
 
-The system is engineered for continuous daily operation on an uncooled, fanless M5 MacBook Air.
-
-### 6.1 Memory Allocation Footprint
+### 6.1 Unified Memory Budget (24,576 MB)
 ```
-Total Unified Memory Budget: 24,576 MB
-├── macOS & System Core:           ~4,600 MB (Constant)
-├── Tauri 2.0 Webview Shell:         ~150 MB (Ultra-lightweight Rust wrapper)
-├── Amstal Engine & LightGBM/PyTorch:~2,800 MB (Kept compact via hidden_size=32)
-├── DuckDB In-Memory Cache:        ~2,000 MB
-├── Available Headroom:           ~15,026 MB
+Total Unified Memory: 24,576 MB
+├── macOS & System Core:                 ~4,600 MB
+├── Tauri 2.0 Webview Shell:               ~150 MB
+├── Amstal Engine (LightGBM + CPU PyTorch):~2,800 MB (hidden_size=32)
+├── Stateless :memory: DuckDB Buffer:    ~2,000 MB
+└── Available Headroom:                 ~15,026 MB
 ```
 
-### 6.2 Thermal Power Budgeting
-* **Fanless Thermal Envelope**: Sustained full-core CPU/GPU utilization throttles M5 package power after ~12–15 minutes.
-* **Mitigation Rules**:
-  1. **Strict Offline Batch Processing**: LLM redline diff scoring (`Llama-3.1-8B`) and FinBERT embeddings never execute during active model training or live market hours. They execute as checkpointed background jobs writing directly to Parquet feature stores.
-  2. **Sub-Minute Training Sweeps**: Right-sized latent vectors (`hidden_size=32`) allow full walk-forward folds across 250 universe stocks to compute in under 30 seconds on Apple Silicon MPS/CPU, finishing long before thermal throttling initiates.
-
----
-
-## 7. Concrete Next Implementation Steps
-
-To transition this architecture into executable code:
-1. **Engine Setup**: Initialize `pyproject.toml`, establish the DuckDB storage layout, and implement the Point-in-Time data loader in `amstal-engine/src/data/market_loader.py`.
-2. **IPC Skeleton**: Implement the UDS and WebSocket broadcaster (`localhost:8194`) in `amstal-engine/src/ipc/`.
-3. **Terminal Foundation**: Initialize the Tauri 2.0 Svelte 5 application in `amstal-terminal/` with the GoldenLayout multi-tile grid and Mnemonic Omnibar component.
+### 6.2 CPU Thread Pinning & Thermal Envelope
+* **Explicit CPU Pinning (`torch.set_num_threads(4)`)**: PyG `GATConv` scatter/gather operations lack native Apple Metal (MPS) kernels, and for 10-node subgraphs and 32-unit GRUs, CPU execution avoids Metal kernel dispatch latency. All neural modules run deterministically on CPU threads.
+* **Burst Thermal Budgeting**: With pre-computed Parquet caches and `hidden_size = 32`, each quarterly walk-forward fold trains and evaluates in <30 seconds, finishing well below the 12-minute fanless M5 thermal throttling threshold.
