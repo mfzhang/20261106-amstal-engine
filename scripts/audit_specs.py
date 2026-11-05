@@ -66,10 +66,18 @@ prd_text = (ENGINE / "PRD.md").read_text() if (ENGINE / "PRD.md").exists() else 
 arch_text = (ENGINE / "architecture.md").read_text() if (ENGINE / "architecture.md").exists() else ""
 readme_text = (ENGINE / "README.md").read_text() if (ENGINE / "README.md").exists() else ""
 
+docs_to_check = [("PRD.md", prd_text), ("architecture.md", arch_text)]
+if readme_text:
+    docs_to_check.append(("README.md", readme_text))
+
+spec_docs = [("PRD.md", prd_text)]
+if readme_text:
+    spec_docs.append(("README.md", readme_text))
+
 # --- Check 2: Stale References ---
 stale_terms = ["Stockman", "stockman", "Arrow Flight", "8195"]
 for term in stale_terms:
-    for name, text in [("PRD.md", prd_text), ("architecture.md", arch_text), ("README.md", readme_text)]:
+    for name, text in docs_to_check:
         if term in text:
             errors.append(f"Stale term '{term}' found in {name}")
 
@@ -93,7 +101,7 @@ expected_tensors = [
 ]
 
 for pattern, desc in expected_tensors:
-    for name, text in [("PRD.md", prd_text), ("architecture.md", arch_text), ("README.md", readme_text)]:
+    for name, text in docs_to_check:
         if not re.search(pattern, text):
             errors.append(f"Missing or mismatched tensor specification '{desc}' in {name}")
 
@@ -117,30 +125,67 @@ def extract_sequence_channels(doc_name: str, text: str) -> set[int]:
             indices.add(int(cell_clean))
     return indices
 
-for name, text in [("PRD.md", prd_text), ("README.md", readme_text)]:
+for name, text in spec_docs:
     seq_channels = extract_sequence_channels(name, text)
-    missing = set(range(15)) - seq_channels
-    if missing:
-        errors.append(f"{name} Microstructure table missing sequence channels: {sorted(missing)}")
+    expected_set = set(range(15))
+    if seq_channels != expected_set:
+        missing = expected_set - seq_channels
+        surplus = seq_channels - expected_set
+        if missing:
+            errors.append(f"{name} Microstructure table missing sequence channels: {sorted(missing)}")
+        if surplus:
+            errors.append(f"{name} Microstructure table contains surplus sequence channels: {sorted(surplus)}")
 
-# Alt-data channels: 12 features total
-for ch_label in ["0-1", "2-3", "4-5", "6", "7", "8", "9-11"]:
-    alt_pattern = rf"`{re.escape(ch_label)}`|`{re.escape(ch_label.replace('-', '–'))}`"
-    if not re.search(alt_pattern, prd_text):
-        errors.append(f"PRD.md missing Alt-Data feature index `{ch_label}`")
-    if not re.search(alt_pattern, readme_text):
-        errors.append(f"README.md missing Alt-Data feature index `{ch_label}`")
+# Alt-data channels: 12 features total parsed strictly from the Alt-Data table
+def extract_alt_data_indices(doc_name: str, text: str) -> set[str]:
+    indices = set()
+    match = re.search(r"\|\s*Index\s*\|\s*Feature Name\s*\|\s*Source / Kernel\s*\|.*?\n(.*?)(?=\n###|\n---|\Z)", text, re.DOTALL | re.IGNORECASE)
+    if not match:
+        errors.append(f"Could not locate Alt-Data table in {doc_name}")
+        return indices
+    table_section = match.group(1)
+    row_matches = re.findall(r"\|\s*`([0-9\–\-]+)`\s*\|", table_section)
+    for cell in row_matches:
+        indices.add(cell.replace("–", "-"))
+    return indices
 
-# Graph node features: 10 features total (0..9)
-for g_idx in range(10):
-    g_pattern = rf"`{g_idx}`"
-    if not re.search(g_pattern, prd_text):
-        errors.append(f"PRD.md missing Graph Node feature index `{g_idx}`")
-    if not re.search(g_pattern, readme_text):
-        errors.append(f"README.md missing Graph Node feature index `{g_idx}`")
+expected_alt_indices = {"0-1", "2-3", "4-5", "6", "7", "8", "9-11"}
+for name, text in spec_docs:
+    alt_indices = extract_alt_data_indices(name, text)
+    if alt_indices != expected_alt_indices:
+        missing = expected_alt_indices - alt_indices
+        surplus = alt_indices - expected_alt_indices
+        if missing:
+            errors.append(f"{name} Alt-Data table missing feature indices: {sorted(missing)}")
+        if surplus:
+            errors.append(f"{name} Alt-Data table contains surplus feature indices: {sorted(surplus)}")
+
+# Graph node features: 10 features total (0..9) parsed strictly from the Peer Graph table
+def extract_graph_node_indices(doc_name: str, text: str) -> set[int]:
+    indices = set()
+    match = re.search(r"\|\s*Index\s*\|\s*Node Feature Description\s*\|.*?\n(.*?)(?=\n###|\n---|\Z)", text, re.DOTALL | re.IGNORECASE)
+    if not match:
+        errors.append(f"Could not locate Peer Graph table in {doc_name}")
+        return indices
+    table_section = match.group(1)
+    row_matches = re.findall(r"\|\s*`([0-9]+)`\s*\|", table_section)
+    for cell in row_matches:
+        indices.add(int(cell))
+    return indices
+
+expected_graph_indices = set(range(10))
+for name, text in spec_docs:
+    graph_indices = extract_graph_node_indices(name, text)
+    if graph_indices != expected_graph_indices:
+        missing = expected_graph_indices - graph_indices
+        surplus = graph_indices - expected_graph_indices
+        if missing:
+            errors.append(f"{name} Peer Graph table missing node indices: {sorted(missing)}")
+        if surplus:
+            errors.append(f"{name} Peer Graph table contains surplus node indices: {sorted(surplus)}")
 
 # --- Check 5: JSON Schema Audit in PRD.md & README.md ---
-json_blocks = re.findall(r"```json\s*(\{.*?\})\s*```", prd_text, re.DOTALL)
+json_blocks = re.findall(r"```json\s*(.*?)\s*```", prd_text, re.DOTALL)
 check(len(json_blocks) >= 2, "Expected at least 2 JSON schema blocks in PRD.md")
 
 for idx, block in enumerate(json_blocks):
@@ -159,14 +204,15 @@ for idx, block in enumerate(json_blocks):
                 if not (-1.0 <= val <= 1.0):
                     errors.append(f"JSON schema '{key}' value {val} is outside valid rank range [-1.0, +1.0]")
             if key == "closing_power_z":
-                # Wait: Is closing power rank-normalized into [-1.0, 1.0]?
-                # If so, why is it called _z with value 1.15?
                 if val > 1.0:
                     errors.append(f"JSON schema 'closing_power_z' value {val} exceeds 1.0; cross-sectional rank normalization requires [-1.0, +1.0]")
 
         # Check calibrated probabilities
         if "calibration" in data and "calibrated_probabilities" in data["calibration"]:
             probs = data["calibration"]["calibrated_probabilities"]
+            for pk, pv in probs.items():
+                if not (0.0 <= pv <= 1.0):
+                    errors.append(f"JSON schema calibrated probability '{pk}' value {pv} is outside [0.0, 1.0]")
             p_sum = sum(probs.values())
             if abs(p_sum - 1.0) > 0.001:
                 errors.append(f"JSON schema calibrated probabilities do not sum to 1.0 (sum = {p_sum})")
@@ -174,6 +220,9 @@ for idx, block in enumerate(json_blocks):
         # Check macro regime probabilities
         if "macro_regime" in data and "filtered_probabilities" in data["macro_regime"]:
             reg_probs = data["macro_regime"]["filtered_probabilities"]
+            for rk, rv in reg_probs.items():
+                if not (0.0 <= rv <= 1.0):
+                    errors.append(f"JSON schema HMM regime probability '{rk}' value {rv} is outside [0.0, 1.0]")
             r_sum = sum(reg_probs.values())
             if abs(r_sum - 1.0) > 0.001:
                 errors.append(f"JSON schema HMM regime probabilities do not sum to 1.0 (sum = {r_sum})")
@@ -236,18 +285,27 @@ def gfm_slug(header: str) -> str:
     s = s.replace(" ", "-")
     return s
 
-for name, text in [("PRD.md", prd_text), ("README.md", readme_text)]:
+for name, text in spec_docs:
     toc_links = re.findall(r"\[(.*?)\]\(#(.*?)\)", text)
     headers = re.findall(r"^#+\s+(.*?)$", text, re.MULTILINE)
-    slugs = {gfm_slug(h) for h in headers}
-    
+    slug_counts = {}
+    slugs = set()
+    for h in headers:
+        base = gfm_slug(h)
+        if base in slug_counts:
+            slug_counts[base] += 1
+            slugs.add(f"{base}-{slug_counts[base]}")
+        else:
+            slug_counts[base] = 0
+            slugs.add(base)
+
     for title, anchor in toc_links:
         if anchor not in slugs:
             errors.append(f"Broken TOC link in {name}: [{title}](#{anchor}) - target slug not found among {slugs}")
 
 # --- Check 10: JSON API Contract Complete Field Validation ---
-for name, text in [("PRD.md", prd_text), ("architecture.md", arch_text), ("README.md", readme_text)]:
-    json_blocks = re.findall(r"```json\s*(\{.*?\})\s*```", text, re.DOTALL)
+for name, text in docs_to_check:
+    json_blocks = re.findall(r"```json\s*(.*?)\s*```", text, re.DOTALL)
     for idx, block in enumerate(json_blocks):
         try:
             data = json.loads(block)
