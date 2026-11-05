@@ -395,3 +395,29 @@ Total Unified Memory: 24,576 MB
 ### 6.2 CPU Thread Pinning & Thermal Envelope
 * **Explicit CPU Pinning (`torch.set_num_threads(4)`)**: PyG `GATConv` scatter/gather operations lack native Apple Metal (MPS) kernels, and for 10-node subgraphs and 32-unit GRUs, CPU execution avoids Metal kernel dispatch latency. All neural modules run deterministically on CPU threads.
 * **Burst Thermal Budgeting**: With pre-computed Parquet caches and `hidden_size = 32`, each quarterly walk-forward fold trains and evaluates in <30 seconds, finishing well below the 12-minute fanless M5 thermal throttling threshold.
+
+---
+
+## 7. Development Safeguards & Numerical Stability Rules
+
+To prevent subtle runtime bugs, look-ahead leakage, or numerical blowups during Phase 1–4 implementation, all modules must enforce these 8 engineering invariants:
+
+1. **Out-of-Sample OLS Projection & Beta Clipping (`residualizer.py`)**:
+   * Stage 1 and Stage 2 OLS parameters $(\hat{\alpha}_{t-1}, \hat{\beta}_{t-1})$ are fit strictly within the historical window $\tau \in [t-60, t-1]$ (where $\nu_{s, \tau}$ is orthogonal to $r_{\text{SPY}, \tau}$, decomposing Stage 2 into two independent univariate projections) and applied out-of-sample to day $t$.
+   * Variance denominators include a ridge floor ($\text{Var}(x) + 10^{-8}$) and betas are clipped to $\hat{\beta}_{\text{mkt}} \in [-1.0, +4.0]$, $\hat{\beta}_{\text{sec}} \in [-3.0, +3.0]$ to prevent trading-halt spikes.
+2. **NaN-Safe Cross-Sectional Ranking (`microstructure.py`)**:
+   * Uses `scipy.stats.rankdata(x, method='average', nan_policy='omit')` divided by $M_{t, \text{valid}} - 1$ (count of valid non-NaN universe stocks on day $t$), with post-rank `NaN` imputation to `0.0` so a single missing bar never corrupts the 250-stock cross-section.
+3. **1D Residual Volatility Scale $\sigma_{\text{ATR}(\epsilon), i, t}$ (`triple_barrier.py`)**:
+   * Because $\epsilon_{i, t}$ is a 1D residual series rather than an OHLC bar, the horizon-scaled volatility barrier unit is defined causally over $[t-19, t]$ as $\sigma_{\text{ATR}(\epsilon), i, t} = \sqrt{10} \cdot \sqrt{\frac{1}{20}\sum_{m=0}^{19} \epsilon_{i, t-m}^2}$.
+4. **Intra-Ticker Concurrency & Weight Normalization (`weights.py`)**:
+   * Concurrency $c_{i, \tau} \in [1, 10]$ is computed **intra-ticker** (counting overlapping active barrier windows for stock $i$ on day $\tau$), and uniqueness weights $u_{i, t}$ are mean-normalized across each training fold ($\frac{1}{N_{\text{train}}}\sum u_{i, t} = 1.0$) to preserve effective learning rate in LightGBM and PyTorch.
+5. **Causal Feature Warm-Up vs. Fold-Scoped Parametric Fitting (`walk_forward.py`)**:
+   * Purely causal rolling features (`60d OLS` + `60d Momentum/Amihud` + `126d Sequence Window` = $246\text{d}$ warm-up burn-in) are computed continuously along the timeline so Validation ($126\text{d}$) and OOS Test ($63\text{d}$) folds never lose their initial rows to warm-up `NaN`s.
+   * All parametric estimators (`LightGBM`, `GRU`, `GAT`, `HMM`, `TemperatureScaler`, and `Kelly` base-rate payoff centering) are fit strictly inside their purged fold boundaries.
+6. **Custom Log-Space Forward Filter (`regime_hmm.py`)**:
+   * Calling `hmmlearn.GaussianHMM.predict_proba(X)` is strictly forbidden because it executes the forward-backward Baum-Welch smoother (leaking future states $x_{t+1:T}$). `regime_hmm.py` implements a custom causal log-space forward recursion using `scipy.special.logsumexp`, and fits `StandardScaler` strictly on the 756-day training fold.
+7. **Bidirectional + Self-Loop Subgraphs & Pure PyG (`graph_builder.py` / `peer_gat.py`)**:
+   * Subgraph edges are constructed bidirectionally between peers/ETF ($v_1 \dots v_9$) and target ($v_0$, always local index `0`) with `add_self_loops=True` so $v_0$ receives incoming peer messages in `GATConv`.
+   * Uses pure `torch-geometric>=2.5.0` native PyTorch scatter operations (no legacy C++ `torch-scatter`/`torch-sparse` compilation required on Python 3.11–3.13).
+8. **Base-Rate Payoff Centering for Gate 4 Zero-Skill Guarantee (`kelly_engine.py`)**:
+   * Realized class payoffs $b_k$ on the validation fold are centered against the empirical validation prior $\bar{\mathbf{p}}$ so $\sum_k \bar{p}_k b_k = 0$. Any zero-skill model outputting prior probabilities ($\hat{\mathbf{p}} = \bar{\mathbf{p}}$) has expected net return $0 - c = -0.0015 < 0$, mathematically guaranteeing $f_i^* = 0.0\%$ allocation at Gate 4.

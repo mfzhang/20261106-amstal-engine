@@ -292,10 +292,14 @@ Because the market ETF (`SPY`) and GICS Sector ETFs (`ETF_s`, e.g., `XLK`, `XLV`
    $$\epsilon_{i, t} = r_{i, t} - \left(\hat{\alpha}_{i, t-1} + \hat{\beta}_{i, \text{mkt}, t-1} \cdot r_{\text{SPY}, t} + \hat{\beta}_{i, \text{sec}, t-1} \cdot r_{\text{ETF}_s, \perp, t}\right)$$
 
 This guarantees stable regression coefficients ($\hat{\beta}_{i, \text{mkt}}$ remains the true total market beta, while $\hat{\beta}_{i, \text{sec}}$ captures pure industry exposure orthogonal to `SPY`), yielding a mathematically robust idiosyncratic residual return $\epsilon_{i, t}$.
+* **Numerical Stability & Strict Out-of-Sample Projection**:
+  * Both Stage 1 and Stage 2 OLS regressions for day $t$ are fit strictly over the historical window $\tau \in [t-60, t-1]$ (where $\nu_{s, \tau}$ and $r_{\text{SPY}, \tau}$ are orthogonal inside the window, decomposing Stage 2 into two independent univariate projections) and applied out-of-sample to day $t$.
+  * Denominator variances include a ridge floor ($\text{Var}(x) + 10^{-8}$) and betas are clipped to $\hat{\beta}_{i, \text{mkt}} \in [-1.0, +4.0]$ and $\hat{\beta}_{i, \text{sec}} \in [-3.0, +3.0]$ to prevent division-by-zero or corporate-action spikes during trading halts.
 
 ### 5.3 Cross-Sectional Daily Rank Normalization
 Enforces stationary distributions across market regimes by ranking every feature $x_{i,t}$ across the active universe ($M_t \approx 250$) on day $t$ into $[-1.0, +1.0]$:
-$$\tilde{x}_{i, t} = 2 \cdot \left(\frac{\text{rank}(x_{i, t}) - 1}{M_t - 1}\right) - 1.0 \in [-1.0, +1.0]$$
+$$\tilde{x}_{i, t} = 2 \cdot \left(\frac{\text{rank}(x_{i, t}) - 1}{M_{t, \text{valid}} - 1}\right) - 1.0 \in [-1.0, +1.0]$$
+* **NaN & Tie Safeguard**: Uses `scipy.stats.rankdata(x, method='average', nan_policy='omit')` where $M_{t, \text{valid}}$ is the count of non-NaN universe assets on day $t$ for that channel. Any missing values are imputed post-ranking to `0.0` (the neutral cross-sectional median) so a single missing bar never contaminates the 250-stock cross-section.
 
 ### 5.4 Hybrid Dual-Mode Intraday Microstructure & Overnight Decomposition `(Batch, 126, 15)`
 Informed institutional repricing concentrates overnight and at the closing cross, while retail liquidity shocks dominate intraday. To allow 10-year walk-forward backtests to run immediately on free daily data while exploiting full hourly bars when Polygon/Alpaca credentials are present, channels `12–14` support an automatic **Hybrid Dual-Mode Fallback**:
@@ -334,22 +338,28 @@ $$X_{\text{event}}(t) = X_0 \cdot \exp\left(-\frac{\ln(2)}{\tau} \cdot \Delta d\
 * SEC 10-Q/10-K Redline Diffs: $\tau_{\text{legal}} = 15.0\text{ days}$
 * SEC Form 4 Open-Market Insider Clusters (ex-10b5-1): $\tau_{\text{form4}} = 20.0\text{ days}$
 
-### 5.7 Variance-Sorted Forward-Filtered HMM
-Fits a 3-state Gaussian HMM (10 random EM restarts) on daily `SPY` returns and `VIX` levels:
-1. Computes forward-filtered probabilities only: $\alpha_t(k) = P(x_{1:t}, S_t = k)$. Backward-pass smoothing is strictly banned.
-2. Sorts states by return variance component $\Sigma_{0,rr} < \Sigma_{1,rr} < \Sigma_{2,rr}$ to enforce permutation invariance across walk-forward folds:
+### 5.7 Variance-Sorted Forward-Filtered HMM (`regime_hmm.py`)
+Fits a 3-state Gaussian HMM (10 random EM restarts) on standardized daily `SPY` log-returns and `VIX` levels:
+1. **Fold-Scoped Standardization**: The `StandardScaler` for `SPY` and `VIX` is fit strictly on the 756-day training fold and applied out-of-sample to the validation and test folds.
+2. **Custom Log-Space Forward Filter (No `hmmlearn.predict_proba` Smoother Leak)**: Because `hmmlearn.GaussianHMM.predict_proba(X)` executes the forward-backward Baum-Welch smoother (leaking future states $x_{t+1:T}$), `regime_hmm.py` explicitly implements the causal log-space forward recursion using `scipy.special.logsumexp`:
+   $$\log \tilde{\alpha}_t(k) = \log P(x_t \mid S_t = k) + \text{logsumexp}_{j=0}^2 \left(\log \alpha_{t-1}(j) + \log A_{j, k}\right), \quad p_t(k) = \exp\left(\log \tilde{\alpha}_t(k) - \text{logsumexp}_{j=0}^2 \log \tilde{\alpha}_t(j)\right)$$
+   This prevents both forward-looking bias and floating-point underflow over long time horizons.
+3. **State Ordering by Return Variance**: Sorts states by return variance component $\Sigma_{0,rr} < \Sigma_{1,rr} < \Sigma_{2,rr}$ to enforce permutation invariance across walk-forward folds:
    `[State 0: Low-Vol Bull, State 1: Sideways, State 2: High-Vol Crash]`.
 
 ### 5.8 Purged Triple-Barrier Labeling, Uniqueness Weighting & Walk-Forward Geometry
-Ternary labels $y_{i, t} \in \{0: \text{Buy}, 1: \text{Hold}, 2: \text{Sell}\}$ on cumulative residual returns $\sum_{\Delta=1}^{10} \epsilon_{i, t+\Delta}$:
-* **Upper Barrier:** $+2.0 \cdot \sigma_{\text{ATR}(\epsilon), i, t}$
-* **Lower Barrier:** $-1.0 \cdot \sigma_{\text{ATR}(\epsilon), i, t}$
-* **Vertical Barrier:** $H = 10\text{ trading days}$
-* **Sample Uniqueness Weighting:** Observations are weighted by average inverse concurrency $u_{i,t} = \frac{1}{t_{\text{end}} - t + 1} \sum_{\tau=t}^{t_{\text{end}}} \frac{1}{c_{i,\tau}}$ over their active barrier lifespan.
+Ternary labels $y_{i, t} \in \{0: \text{Buy}, 1: \text{Hold}, 2: \text{Sell}\}$ are generated on cumulative residual return paths $C_{\epsilon, i}(t, k) = \sum_{\Delta=1}^{k} \epsilon_{i, t+\Delta}$ for $k \in \{1 \dots 10\}$:
+* **1D Residual Volatility Scale ($\sigma_{\text{ATR}(\epsilon), i, t}$)**: Because $\epsilon_{i, t}$ is a 1D residual series rather than an OHLC bar, its horizon-scaled volatility unit is defined causally over $[t-19, t]$ as:
+  $$\sigma_{\text{ATR}(\epsilon), i, t} = \sqrt{10} \cdot \sqrt{\frac{1}{20} \sum_{m=0}^{19} \epsilon_{i, t-m}^2}$$
+* **Upper Barrier:** $+2.0 \cdot \sigma_{\text{ATR}(\epsilon), i, t}$ (Label `0: Buy/Outperform` at first $k \le 10$ where $C_{\epsilon, i}(t, k) \ge +2.0 \cdot \sigma_{\text{ATR}(\epsilon), i, t}$)
+* **Lower Barrier:** $-1.0 \cdot \sigma_{\text{ATR}(\epsilon), i, t}$ (Label `2: Sell/Underperform` at first $k \le 10$ where $C_{\epsilon, i}(t, k) \le -1.0 \cdot \sigma_{\text{ATR}(\epsilon), i, t}$)
+* **Vertical Barrier:** $H = 10\text{ trading days}$ (Label `1: Hold/Neutral` if neither horizontal barrier is breached by $k = 10$, with $t_{\text{end}} = t + 10$)
+* **Intra-Ticker Sample Uniqueness Weighting**: Observations are weighted by average inverse **intra-ticker** concurrency $u_{i,t} = \frac{1}{t_{\text{end}} - t + 1} \sum_{\tau=t}^{t_{\text{end}}} \frac{1}{c_{i,\tau}}$, where $c_{i, \tau} \in [1, 10]$ counts active overlapping barrier windows for ticker $i$ on day $\tau$. Weights $u_{i, t}$ are mean-normalized across each training fold ($\frac{1}{N_{\text{train}}}\sum u_{i, t} = 1.0$) to preserve gradient scale.
 * **Locked Walk-Forward Fold Geometry (`walk_forward.py`)**:
   ```
-  [ Rolling 3-Year Train (756d) ] ──► [ 10d Purge ] ──► [ 6-Month Validation (126d) ] ──► [ 10d Purge ] ──► [ 3-Month OOS Test (63d) ]
+  [ 246d Causal Feature Warm-Up ] ──► [ Rolling 3-Year Train (756d) ] ──► [ 10d Purge ] ──► [ 6-Month Val (126d) ] ──► [ 10d Purge ] ──► [ 3-Month OOS Test (63d) ]
   ```
+  * **Causal Feature Pre-Computation vs. Fold-Scoped Parametric Fitting**: Purely causal rolling features (`60d OLS` + `60d Momentum/Amihud` + `126d Sequence Window` = $246\text{d}$ total warm-up burn-in) are computed continuously along the causal timeline so Validation ($126\text{d}$) and OOS Test ($63\text{d}$) folds never lose their initial rows to warm-up `NaN`s. Conversely, all parametric models (`LightGBM`, `GRU`, `GAT`, `HMM`, `TemperatureScaler`, and `Kelly` payoff centering) are fit strictly inside their purged fold boundaries.
   * **Purge Rule:** Any observation across all 250 tickers whose barrier resolution timestamp $t_{\text{end}}$ extends past the split cutoff date ($t_{\text{end}} > D_{\text{cutoff}}$) is strictly purged.
   * **Validation Split Purpose:** Used exclusively for model early stopping, LightGBM/GRU ensemble log-likelihood weighting, and fitting the post-hoc Temperature Scaler ($T > 0$) without touching the 3-month Out-of-Sample test fold.
   * **Re-fit Cadence:** Steps forward by 63 trading days (quarterly re-fit).
@@ -361,7 +371,8 @@ $$\mathbf{h}_{\text{fused}} = [\mathbf{h}_{\text{temporal\_or\_cross}}^{(32)} \,
    * **Phase 2 Mode (Alt-Data Missingness Masks = `0.0`)**: Bypasses Cross-Modal Attention and passes the 2-head self-attention pooled temporal representation $\mathbf{h}_{\text{temporal}} \in \mathbb{R}^{(B, 32)}$ directly.
    * **Phase 3 Mode (Alt-Data Active)**: Uses the Alt-Data vector $(B, 1, 32)$ as Query $Q$ and Temporal sequence $(B, 126, 32)$ as Key/Value $K, V$ with residual connection $t_{126}$.
 2. **Channels `32..63` — Dynamic Rolling Peer GAT Output $(B, 32)$**:
-   * Root target node $v_0$ embedding extracted via `batch.ptr[:-1]`.
+   * Root target node $v_0$ (always indexed at local node `0` of each 10-node subgraph) is extracted via `batch.ptr[:-1]`.
+   * **Bidirectional Edge + Self-Loop Topology**: Subgraph edges in `graph_builder.py` are constructed bidirectionally between peers/ETF ($v_1 \dots v_9$) and target ($v_0$) with self-loops enabled (`add_self_loops=True`), ensuring $v_0$ aggregates incoming messages from all 9 peer nodes in PyG `GATConv` (using pure `torch-geometric>=2.5.0` native PyTorch scatter ops without legacy C++ `torch-scatter` compilation).
 3. **Channels `64..65` — Signed Smart-Money Divergence $[D_t^+, D_t^-] \in \mathbb{R}^{(B, 2)}$**:
    * **Phase 2 Mode**: Zero-masked to `[0.0, 0.0]` prior to FinBERT activation.
    * **Phase 3 Mode**: Decomposes volume-weighted sentiment divergence $D_t = S_{\text{FinBERT}, t} \times \left(-\frac{\epsilon_t \cdot V_t}{\bar{V}_{20}}\right)$ into explicit institutional distribution and accumulation channels:
@@ -375,8 +386,9 @@ $$\mathbf{h}_{\text{fused}} = [\mathbf{h}_{\text{temporal\_or\_cross}}^{(32)} \,
 2. **Configurable Execution Mode (`LONG_ONLY` Default vs. `LONG_SHORT` Diagnostics)**:
    * **Default Portfolio Mode (`execution_mode = "LONG_ONLY"`)**: Constrains single-stock allocation to $f_i \in [0, f_{\max}]$ with $f_{\max} = 0.10$. When `Underperform/Sell` dominates, optimal long allocation solves to $f_i^* = 0.0$ (exiting long positions into cash, never opening margin short positions).
    * **Diagnostic Stat-Arb Mode (`execution_mode = "LONG_SHORT"`)**: Evaluates cross-sectional Rank Information Coefficient (IC) and theoretical dollar-neutral Long-Short portfolio Sharpe in `metrics.py`.
-3. **Single-Stock Multi-Outcome Kelly Optimization**:
-   Solves for unconstrained allocation $f_i^*$ net of 15 bps round-trip friction ($c = 0.0015$):
+3. **Single-Stock Multi-Outcome Kelly Optimization & Base-Rate Payoff Centering**:
+   Because the asymmetric $+2\sigma / -1\sigma$ barriers have unequal unconditional hit rates ($\bar{p}_{\text{buy}}, \bar{p}_{\text{hold}}, \bar{p}_{\text{sell}}$), class payoffs $b_k$ are estimated from the validation fold's realized class means and centered against the empirical validation prior $\bar{\mathbf{p}}$ so that $\sum_k \bar{p}_k b_k = 0$. This mathematically guarantees **Gate 4 Criterion #2**: any zero-skill or uninformative model outputting prior probabilities ($\hat{\mathbf{p}} = \bar{\mathbf{p}}$) has expected net return $0 - c = -0.0015 < 0$, yielding strictly $f_i^* = 0.0\%$ allocation.
+   For informative signals ($\sum_k \hat{p}_k b_k > c$), `kelly_engine.py` solves net of 15 bps round-trip friction ($c = 0.0015$):
    $$\max_{f \in [0, f_{\max}]} \mathbb{E}[\ln(1 + f \cdot R_{\text{net}})] = \hat{p}_{\text{buy}} \ln(1 + f (b_{\text{upper}} - c)) + \hat{p}_{\text{sell}} \ln(1 - f (|b_{\text{lower}}| + c)) + \hat{p}_{\text{hold}} \ln(1 + f (\bar{r}_{\text{vert}} - c))$$
    Scaled by macro regime multiplier $\kappa \in [0.25, 0.50]$ (Quarter/Half Kelly) with a single-stock ceiling of $10\%$ ($15\%$ absolute hard cap).
 4. **Portfolio-Level $L_1$ Gross Exposure Normalization**:
