@@ -3,6 +3,16 @@ Shared Test Fixtures for Amstal Quant Engine
 Provides deterministic synthetic price, volume, and factor return generators.
 """
 
+import os
+# Prevent OpenMP runtime clashing between PyTorch and LightGBM on macOS
+os.environ.setdefault("OMP_NUM_THREADS", "1")
+os.environ.setdefault("KMP_DUPLICATE_LIB_OK", "TRUE")
+
+try:
+    import torch
+except ImportError:
+    pass
+
 import pytest
 import numpy as np
 import pandas as pd
