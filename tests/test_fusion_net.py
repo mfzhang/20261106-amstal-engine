@@ -119,3 +119,101 @@ def test_end_to_end_multimodal_pipeline() -> None:
     assert calibrated_probs.shape == (B, 3)
     assert np.all(calibrated_probs >= 0.0)
     assert np.allclose(calibrated_probs.sum(axis=1), 1.0, atol=1e-5)
+
+
+def test_fusion_net_phase3_cross_modal_attention() -> None:
+    """Verifies Phase 3 Cross-Modal Attention with event features and temporal sequence."""
+    B = 6
+    T = 126
+    h_temp = torch.randn(B, 32)
+    h_graph = torch.randn(B, 32)
+    temporal_seq = torch.randn(B, T, 32)
+
+    # Active event features: masks at indices 9..11 are 0.0 (active news and insider)
+    event_feats = torch.zeros(B, 12)
+    event_feats[:, 0] = 0.75  # sentiment
+    event_feats[:, 2] = 0.60  # insider score
+    event_feats[:, 9] = 0.0   # news mask: present
+    event_feats[:, 10] = 0.0  # insider mask: present
+    event_feats[:, 11] = 1.0  # 10q mask: missing
+
+    model = ModalityMaskedFusionNet(dropout=0.0)
+    logits, h_gated, h_fused = model(
+        h_temp,
+        h_graph,
+        kappa=0.50,
+        event_features=event_feats,
+        temporal_seq=temporal_seq,
+    )
+
+    # Multi-modal latent invariant: (B, 66)
+    assert h_fused.shape == (B, 66)
+    assert h_gated.shape == (B, 32)
+    assert logits.shape == (B, 3)
+
+    # When all event modalities are missing (masks = 1.0), cross-attention is bypassed
+    missing_events = torch.zeros(B, 12)
+    missing_events[:, 9:12] = 1.0
+    _, _, h_fused_missing = model(
+        h_temp,
+        h_graph,
+        kappa=0.50,
+        event_features=missing_events,
+        temporal_seq=temporal_seq,
+    )
+    # The effective temporal representation matches h_temp directly
+    assert torch.allclose(h_fused_missing[:, :32], h_temp, atol=1e-5)
+
+
+def test_fusion_net_phase3_smart_money_incorporation() -> None:
+    """Verifies that signed smart-money divergence [D_t^+, D_t^-] enters channels 64..65."""
+    B = 4
+    h_temp = torch.randn(B, 32)
+    h_graph = torch.randn(B, 32)
+    d_t = torch.tensor([[0.45, 0.0], [0.0, 0.82], [0.12, 0.0], [0.0, 0.0]], dtype=torch.float32)
+
+    model = ModalityMaskedFusionNet()
+    _, _, h_fused = model(h_temp, h_graph, kappa=0.40, d_t=d_t)
+
+    assert h_fused.shape == (B, 66)
+    # Channels 64..65 must strictly match d_t
+    assert torch.allclose(h_fused[:, 64:66], d_t)
+
+
+def test_fusion_net_fit_with_event_features() -> None:
+    """Verifies training ModalityMaskedFusionNet end-to-end with event features and smart money."""
+    B = 64
+    T = 20
+    h_temp = np.random.randn(B, 32).astype(np.float32)
+    h_graph = np.random.randn(B, 32).astype(np.float32)
+    temporal_seq = np.random.randn(B, T, 32).astype(np.float32)
+    event_feats = np.zeros((B, 12), dtype=np.float32)
+    event_feats[:, 0] = np.random.uniform(-1, 1, size=B)
+    event_feats[:, 9] = 0.0  # active
+    d_t = np.maximum(0.0, np.random.randn(B, 2).astype(np.float32))
+    y = np.random.choice([0, 1, 2], size=B)
+
+    model = ModalityMaskedFusionNet(dropout=0.1)
+    model.fit(
+        h_temp,
+        h_graph,
+        y,
+        kappa=0.40,
+        d_t=d_t,
+        event_features=event_feats,
+        temporal_seq=temporal_seq,
+        epochs=3,
+        batch_size=16,
+    )
+    assert model.is_fitted_
+
+    cal_probs = model.predict_calibrated_proba(
+        h_temp[:5],
+        h_graph[:5],
+        kappa=0.40,
+        d_t=d_t[:5],
+        event_features=event_feats[:5],
+        temporal_seq=temporal_seq[:5],
+    )
+    assert cal_probs.shape == (5, 3)
+    assert np.allclose(cal_probs.sum(axis=1), 1.0, atol=1e-5)

@@ -24,6 +24,7 @@ class ModalityMaskedFusionNet(nn.Module):
 
     TEMPORAL_DIM = 32
     GRAPH_DIM = 32
+    EVENT_DIM = 12
     ALT_DATA_DIM = 2
     FUSED_DIM = 66  # 32 + 32 + 2
     NUM_CLASSES = 3
@@ -38,6 +39,23 @@ class ModalityMaskedFusionNet(nn.Module):
         self.random_state = random_state
 
         torch.manual_seed(self.random_state)
+
+        # Phase 3: Alt-Data Event Projection: Linear(12 -> 32) + LN + GELU + Dropout(0.2)
+        self.event_proj = nn.Sequential(
+            nn.Linear(self.EVENT_DIM, self.TEMPORAL_DIM),
+            nn.LayerNorm(self.TEMPORAL_DIM),
+            nn.GELU(),
+            nn.Dropout(0.20),
+        )
+
+        # Phase 3: Cross-Modal Multi-Head Attention (Alt-Data Query Q vs Temporal Sequence K, V)
+        self.cross_attn = nn.MultiheadAttention(
+            embed_dim=self.TEMPORAL_DIM,
+            num_heads=2,
+            batch_first=True,
+            dropout=0.20,
+        )
+        self.ln_cross = nn.LayerNorm(self.TEMPORAL_DIM)
 
         # HMM Sigmoid Gate: maps (B, 66) -> (B, 32) gate coefficients
         self.gate_dense = nn.Linear(self.FUSED_DIM, self.TEMPORAL_DIM)
@@ -61,9 +79,16 @@ class ModalityMaskedFusionNet(nn.Module):
         h_graph: torch.Tensor,
         kappa: Union[float, torch.Tensor] = 0.50,
         d_t: Optional[torch.Tensor] = None,
+        event_features: Optional[torch.Tensor] = None,
+        temporal_seq: Optional[torch.Tensor] = None,
     ) -> Tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
         """
         Executes multimodal fusion and HMM sigmoid gating:
+        In Phase 2 Mode (event_features=None, d_t=None):
+          Uses pooled h_temporal directly and zero-masks smart-money channels.
+        In Phase 3 Mode (event_features and d_t present):
+          Executes Cross-Modal Attention with event Query Q and temporal Key/Value K, V
+          and incorporates explicit signed smart-money divergence [D_t^+, D_t^-].
         Returns:
         1. logits: (Batch, 3) classification logits
         2. h_gated: (Batch, 32) gated latent vector
@@ -75,20 +100,41 @@ class ModalityMaskedFusionNet(nn.Module):
                 f"Batch dimension mismatch: h_temporal has {batch_size} samples, h_graph has {h_graph.shape[0]}"
             )
 
-        # Phase 2 Mode: Alt-data smart money divergence is zero-masked to (B, 2)
+        # Phase 3 Cross-Modal Attention
+        h_temp_eff = h_temporal
+        if event_features is not None:
+            if event_features.shape[0] != batch_size or event_features.shape[1] != self.EVENT_DIM:
+                raise ValueError(f"Expected event_features of shape ({batch_size}, {self.EVENT_DIM}), got {event_features.shape}")
+
+            # Check if any modality is present (channels 9..11 are missingness masks: 1.0 = missing)
+            masks = event_features[:, 9:12]
+            all_missing = torch.all(masks >= 0.99)
+
+            if not all_missing:
+                # Project event features (B, 12) -> (B, 1, 32)
+                e_proj = self.event_proj(event_features).unsqueeze(1)
+                if temporal_seq is not None:
+                    # Cross-attention: Query = e_proj (B, 1, 32), Key/Value = temporal_seq (B, T, 32)
+                    attn_out, _ = self.cross_attn(query=e_proj, key=temporal_seq, value=temporal_seq)
+                    h_temp_eff = self.ln_cross(attn_out.squeeze(1) + h_temporal)
+                else:
+                    # Direct residual blending with temporal pooled state
+                    h_temp_eff = self.ln_cross(e_proj.squeeze(1) + h_temporal)
+
+        # Smart-Money Divergence channels [64..65]
         if d_t is None:
             d_t = torch.zeros((batch_size, self.ALT_DATA_DIM), dtype=torch.float32, device=h_temporal.device)
         elif d_t.shape[1] != self.ALT_DATA_DIM:
-            raise ValueError(f"Expected d_t of shape (Batch, 2), got {d_t.shape}")
+            raise ValueError(f"Expected d_t of shape ({batch_size}, {self.ALT_DATA_DIM}), got {d_t.shape}")
 
-        # Assemble locked (B, 66) vector: [h_temporal || h_graph || D_t]
-        h_fused = torch.cat([h_temporal, h_graph, d_t], dim=-1)
+        # Assemble locked (B, 66) vector: [h_temporal_effective || h_graph || D_t]
+        h_fused = torch.cat([h_temp_eff, h_graph, d_t], dim=-1)
 
         # Compute Sigmoid Gate g in (0, 1): (B, 32)
         gate = self.sigmoid(self.gate_dense(h_fused))
 
-        # Convex combination between temporal representation and graph peer spillover
-        h_inter = gate * h_temporal + (1.0 - gate) * h_graph
+        # Convex combination between temporal/cross-modal representation and graph peer spillover
+        h_inter = gate * h_temp_eff + (1.0 - gate) * h_graph
 
         # Modulate by macro regime multiplier kappa in [0.25, 0.50]
         if isinstance(kappa, (int, float)):
@@ -109,6 +155,8 @@ class ModalityMaskedFusionNet(nn.Module):
         h_graph: Union[np.ndarray, torch.Tensor],
         kappa: Union[float, np.ndarray, torch.Tensor] = 0.50,
         d_t: Optional[Union[np.ndarray, torch.Tensor]] = None,
+        event_features: Optional[Union[np.ndarray, torch.Tensor]] = None,
+        temporal_seq: Optional[Union[np.ndarray, torch.Tensor]] = None,
     ) -> np.ndarray:
         """Computes uncalibrated softmax probabilities (Batch, 3)."""
         self.eval()
@@ -122,7 +170,19 @@ class ModalityMaskedFusionNet(nn.Module):
             t_dt = torch.as_tensor(d_t, dtype=torch.float32) if d_t is not None else None
             if t_dt is not None and t_dt.ndim == 1:
                 t_dt = t_dt.unsqueeze(0)
-            logits, _, _ = self.forward(t_temp, t_graph, kappa=kappa, d_t=t_dt)
+            t_ev = torch.as_tensor(event_features, dtype=torch.float32) if event_features is not None else None
+            if t_ev is not None and t_ev.ndim == 1:
+                t_ev = t_ev.unsqueeze(0)
+            t_seq = torch.as_tensor(temporal_seq, dtype=torch.float32) if temporal_seq is not None else None
+
+            logits, _, _ = self.forward(
+                t_temp,
+                t_graph,
+                kappa=kappa,
+                d_t=t_dt,
+                event_features=t_ev,
+                temporal_seq=t_seq,
+            )
             probs = torch.softmax(logits, dim=-1)
             return probs.cpu().numpy().astype(np.float64)
 
@@ -158,6 +218,8 @@ class ModalityMaskedFusionNet(nn.Module):
         h_graph: Union[np.ndarray, torch.Tensor],
         kappa: Union[float, np.ndarray, torch.Tensor] = 0.50,
         d_t: Optional[Union[np.ndarray, torch.Tensor]] = None,
+        event_features: Optional[Union[np.ndarray, torch.Tensor]] = None,
+        temporal_seq: Optional[Union[np.ndarray, torch.Tensor]] = None,
     ) -> np.ndarray:
         """Computes temperature-calibrated softmax probabilities (Batch, 3)."""
         self.eval()
@@ -171,7 +233,19 @@ class ModalityMaskedFusionNet(nn.Module):
             t_dt = torch.as_tensor(d_t, dtype=torch.float32) if d_t is not None else None
             if t_dt is not None and t_dt.ndim == 1:
                 t_dt = t_dt.unsqueeze(0)
-            logits, _, _ = self.forward(t_temp, t_graph, kappa=kappa, d_t=t_dt)
+            t_ev = torch.as_tensor(event_features, dtype=torch.float32) if event_features is not None else None
+            if t_ev is not None and t_ev.ndim == 1:
+                t_ev = t_ev.unsqueeze(0)
+            t_seq = torch.as_tensor(temporal_seq, dtype=torch.float32) if temporal_seq is not None else None
+
+            logits, _, _ = self.forward(
+                t_temp,
+                t_graph,
+                kappa=kappa,
+                d_t=t_dt,
+                event_features=t_ev,
+                temporal_seq=t_seq,
+            )
             scaled = logits / max(self.temperature_, 1e-4)
             probs = torch.softmax(scaled, dim=-1)
             return probs.cpu().numpy().astype(np.float64)
@@ -183,6 +257,8 @@ class ModalityMaskedFusionNet(nn.Module):
         y_train: np.ndarray,
         kappa: Union[float, np.ndarray] = 0.50,
         d_t: Optional[np.ndarray] = None,
+        event_features: Optional[np.ndarray] = None,
+        temporal_seq: Optional[np.ndarray] = None,
         epochs: int = 15,
         lr: float = 0.005,
         batch_size: int = 32,
@@ -196,6 +272,9 @@ class ModalityMaskedFusionNet(nn.Module):
         t_graph = torch.tensor(h_graph, dtype=torch.float32)
         t_y = torch.tensor(y_train, dtype=torch.long)
         t_dt = torch.tensor(d_t, dtype=torch.float32) if d_t is not None else None
+        t_ev = torch.tensor(event_features, dtype=torch.float32) if event_features is not None else None
+        t_seq = torch.tensor(temporal_seq, dtype=torch.float32) if temporal_seq is not None else None
+        t_kappa = torch.tensor(kappa, dtype=torch.float32) if isinstance(kappa, (np.ndarray, list, torch.Tensor)) else None
 
         n = len(t_temp)
         for _ in range(epochs):
@@ -204,11 +283,16 @@ class ModalityMaskedFusionNet(nn.Module):
                 batch_idx = perm[i : i + batch_size]
                 optimizer.zero_grad()
                 b_dt = t_dt[batch_idx] if t_dt is not None else None
+                b_ev = t_ev[batch_idx] if t_ev is not None else None
+                b_seq = t_seq[batch_idx] if t_seq is not None else None
+                b_kappa = t_kappa[batch_idx] if t_kappa is not None else kappa
                 logits, _, _ = self.forward(
                     t_temp[batch_idx],
                     t_graph[batch_idx],
-                    kappa=kappa,
+                    kappa=b_kappa,
                     d_t=b_dt,
+                    event_features=b_ev,
+                    temporal_seq=b_seq,
                 )
                 loss = criterion(logits, t_y[batch_idx])
                 loss.backward()
