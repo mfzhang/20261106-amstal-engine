@@ -1,6 +1,7 @@
 """
 SEC EDGAR XBRL & Filing Client
-Enforces token bucket rate limits (<=10 req/s) and mandatory User-Agent compliance.
+Enforces token bucket rate limits (<=10 req/s), mandatory User-Agent compliance,
+deterministic US-GAAP XBRL tag fallback hierarchy, and Form 4 XML cluster scoring.
 """
 
 from dataclasses import dataclass
@@ -10,8 +11,12 @@ import os
 import re
 import threading
 import time
-from typing import Dict, List, Optional
+from typing import Any, Dict, List, Optional, Union
 import xml.etree.ElementTree as ET
+
+import pandas as pd
+
+from src.data.market_loader import MarketDataLoader
 
 
 @dataclass(frozen=True)
@@ -31,6 +36,17 @@ class StandardInsiderTransaction:
     def dollar_value(self) -> float:
         return float(self.shares * self.price)
 
+    @property
+    def effective_date(self) -> str:
+        """
+        Returns the Point-in-Time effective trading date after applying the
+        >16:00 America/New_York -> t+1 rollover rule.
+        """
+        if self.acceptance_datetime and self.acceptance_datetime.strip():
+            ts = MarketDataLoader.apply_pit_cutoff(self.acceptance_datetime)
+            return ts.strftime("%Y-%m-%d")
+        return self.filing_date
+
 
 @dataclass(frozen=True)
 class StandardIncomeStatement:
@@ -43,6 +59,132 @@ class StandardIncomeStatement:
     operating_income: float
     net_income: float
     eps_diluted: float
+
+
+class XBRLTagResolver:
+    """
+    Deterministic US-GAAP XBRL Tag Fallback Hierarchy (architecture.md Section 4.2).
+    Resolves tag drift across 10-year reporting histories and enforces Point-in-Time
+    filing acceptance timestamps (>16:00 America/New_York shifted to t+1).
+    """
+
+    REVENUE_TAGS: List[str] = [
+        "RevenueFromContractWithCustomerExcludingAssessedTax",
+        "Revenues",
+        "SalesRevenueNet",
+        "SalesRevenueGoodsNet",
+    ]
+    GROSS_PROFIT_TAGS: List[str] = [
+        "GrossProfit",
+    ]
+    COST_OF_REVENUE_TAGS: List[str] = [
+        "CostOfGoodsAndServicesSold",
+        "CostOfRevenue",
+    ]
+    OPERATING_INCOME_TAGS: List[str] = [
+        "OperatingIncomeLoss",
+        "IncomeLossFromContinuingOperationsBeforeIncomeTaxesExtraordinaryItemsNoncontrollingInterest",
+    ]
+    NET_INCOME_TAGS: List[str] = [
+        "NetIncomeLoss",
+        "ProfitLoss",
+        "NetIncomeLossAvailableToCommonStockholdersBasic",
+    ]
+    EPS_DILUTED_TAGS: List[str] = [
+        "EarningsPerShareDiluted",
+        "IncomeLossFromContinuingOperationsPerDilutedShare",
+        "EarningsPerShareBasic",
+    ]
+
+    @classmethod
+    def resolve_tag(
+        cls,
+        facts: Dict[str, Any],
+        hierarchy: List[str],
+        default: float = 0.0,
+    ) -> float:
+        """
+        Resolves the first non-null numeric value from a US-GAAP tag hierarchy.
+        Supports both unprefixed tags ('Revenues') and namespace-prefixed tags ('us-gaap:Revenues').
+        """
+        if not facts:
+            return default
+
+        for tag in hierarchy:
+            for candidate_key in (tag, f"us-gaap:{tag}", f"us-gaap_{tag}"):
+                if candidate_key in facts and facts[candidate_key] is not None:
+                    try:
+                        val = float(facts[candidate_key])
+                        if not math.isnan(val) and not math.isinf(val):
+                            return val
+                    except (TypeError, ValueError):
+                        continue
+        return default
+
+    @classmethod
+    def parse_income_statement_pit(
+        cls,
+        period_end: str,
+        facts: Dict[str, Any],
+        acceptance_datetime: str = "",
+        filed_date: str = "",
+    ) -> StandardIncomeStatement:
+        """
+        Normalizes a raw XBRL fact dictionary into an immutable StandardIncomeStatement.
+        Enforces the >16:00 America/New_York -> t+1 rollover rule on acceptance_datetime.
+        """
+        effective_filed = filed_date
+        if acceptance_datetime and acceptance_datetime.strip():
+            eff_ts = MarketDataLoader.apply_pit_cutoff(acceptance_datetime)
+            effective_filed = eff_ts.strftime("%Y-%m-%d")
+        elif not effective_filed:
+            effective_filed = period_end
+
+        revenue = cls.resolve_tag(facts, cls.REVENUE_TAGS, default=0.0)
+        gross_profit = cls.resolve_tag(facts, cls.GROSS_PROFIT_TAGS, default=float("nan"))
+        if math.isnan(gross_profit):
+            cost_of_rev = cls.resolve_tag(facts, cls.COST_OF_REVENUE_TAGS, default=float("nan"))
+            if not math.isnan(cost_of_rev) and revenue != 0.0:
+                gross_profit = revenue - cost_of_rev
+            else:
+                gross_profit = 0.0
+
+        operating_income = cls.resolve_tag(facts, cls.OPERATING_INCOME_TAGS, default=0.0)
+        net_income = cls.resolve_tag(facts, cls.NET_INCOME_TAGS, default=0.0)
+        eps_diluted = cls.resolve_tag(facts, cls.EPS_DILUTED_TAGS, default=0.0)
+
+        return StandardIncomeStatement(
+            period_end=period_end,
+            filed_date=effective_filed,
+            acceptance_datetime=acceptance_datetime or effective_filed,
+            revenue=float(revenue),
+            gross_profit=float(gross_profit),
+            operating_income=float(operating_income),
+            net_income=float(net_income),
+            eps_diluted=float(eps_diluted),
+        )
+
+    @staticmethod
+    def filter_pit_statements(
+        statements: List[StandardIncomeStatement],
+        as_of_date: Union[str, pd.Timestamp],
+    ) -> List[StandardIncomeStatement]:
+        """
+        Filters financial statements strictly to those filed on or before as_of_date.
+        If a fiscal period_end was later restated, retains only the version known as of as_of_date.
+        Returns statements sorted chronologically by period_end.
+        """
+        cutoff = pd.Timestamp(as_of_date).tz_localize(None)
+        known_by_period: Dict[str, StandardIncomeStatement] = {}
+
+        for stmt in statements:
+            filed_ts = pd.Timestamp(stmt.filed_date).tz_localize(None)
+            if filed_ts <= cutoff:
+                existing = known_by_period.get(stmt.period_end)
+                if existing is None or pd.Timestamp(stmt.filed_date) >= pd.Timestamp(existing.filed_date):
+                    known_by_period[stmt.period_end] = stmt
+
+        return sorted(known_by_period.values(), key=lambda s: s.period_end)
 
 
 class Form4Parser:
@@ -89,7 +231,10 @@ class Form4Parser:
 
         relation = "OFFICER"
         officer_title_node = root.find(".//officerTitle")
-        if officer_title_node is not None and officer_title_node.text:
+        director_node = root.find(".//isDirector")
+        ten_pct_node = root.find(".//isTenPercentOwner")
+
+        if officer_title_node is not None and officer_title_node.text and officer_title_node.text.strip():
             title_upper = officer_title_node.text.strip().upper()
             if "CEO" in title_upper or "CHIEF EXECUTIVE" in title_upper:
                 relation = "CEO"
@@ -101,15 +246,15 @@ class Form4Parser:
                 relation = "COO"
             else:
                 relation = "OFFICER"
-        elif root.find(".//isDirector") is not None and root.find(".//isDirector").text in ("1", "true", "True"):
+        elif director_node is not None and director_node.text and director_node.text.strip() in ("1", "true", "True"):
             relation = "DIRECTOR"
-        elif root.find(".//isTenPercentOwner") is not None and root.find(".//isTenPercentOwner").text in ("1", "true", "True"):
+        elif ten_pct_node is not None and ten_pct_node.text and ten_pct_node.text.strip() in ("1", "true", "True"):
             relation = "10% OWNER"
 
         # Check for Rule 10b5-1 indication
         is_10b5_1 = False
         aff_node = root.find(".//affirmation10b51")
-        if aff_node is not None and aff_node.text in ("1", "true", "True"):
+        if aff_node is not None and aff_node.text and aff_node.text.strip() in ("1", "true", "True"):
             is_10b5_1 = True
         else:
             # Check footnotes for 10b5-1 mentions
@@ -118,13 +263,18 @@ class Form4Parser:
                     is_10b5_1 = True
                     break
 
+        # Effective filing date if acceptance_datetime is provided
+        effective_filing_date = filing_date
+        if not effective_filing_date and acceptance_datetime and acceptance_datetime.strip():
+            effective_filing_date = MarketDataLoader.apply_pit_cutoff(acceptance_datetime).strftime("%Y-%m-%d")
+
         # Parse non-derivative transactions
         for tx_node in root.findall(".//nonDerivativeTransaction"):
             code_node = tx_node.find(".//transactionCoding/transactionCode")
             code = code_node.text.strip().upper() if code_node is not None and code_node.text else "P"
 
             date_node = tx_node.find(".//transactionDate/value")
-            tx_date = date_node.text.strip() if date_node is not None and date_node.text else filing_date
+            tx_date = date_node.text.strip() if date_node is not None and date_node.text else effective_filing_date
 
             shares_node = tx_node.find(".//transactionAmounts/transactionShares/value")
             try:
@@ -147,7 +297,7 @@ class Form4Parser:
 
             transactions.append(
                 StandardInsiderTransaction(
-                    filing_date=filing_date,
+                    filing_date=effective_filing_date,
                     acceptance_datetime=acceptance_datetime,
                     transaction_date=tx_date,
                     insider_name=insider_name,
@@ -165,19 +315,28 @@ class Form4Parser:
     def compute_cluster_score(
         cls,
         transactions: List[StandardInsiderTransaction],
+        as_of_date: Optional[Union[str, pd.Timestamp]] = None,
     ) -> float:
         """
         Computes signed insider cluster conviction score:
         - Open market purchases ('P') produce positive edge: + w_role * ln(1 + dollar_value)
         - Open market sales ('S') produce negative edge: - 0.5 * w_role * ln(1 + dollar_value)
         - 10b5-1 pre-scheduled transactions are discounted by 80%
+        - If as_of_date is supplied, strictly filters out transactions whose Point-in-Time
+          effective_date is after as_of_date.
         Returns normalized score in [-1.0, +1.0].
         """
         if not transactions:
             return 0.0
 
+        cutoff_ts = pd.Timestamp(as_of_date).tz_localize(None) if as_of_date is not None else None
+
         net_raw = 0.0
         for tx in transactions:
+            if cutoff_ts is not None and tx.effective_date:
+                if pd.Timestamp(tx.effective_date).tz_localize(None) > cutoff_ts:
+                    continue
+
             if tx.transaction_code not in ("P", "S"):
                 continue  # Skip option exercises / gifts / awards
 

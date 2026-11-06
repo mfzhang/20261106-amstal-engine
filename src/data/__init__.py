@@ -7,6 +7,7 @@ from src.data.market_loader import MarketDataLoader
 from src.data.sec_edgar import (
     SecEdgarClient,
     Form4Parser,
+    XBRLTagResolver,
     StandardInsiderTransaction,
     StandardIncomeStatement,
 )
@@ -17,6 +18,7 @@ __all__ = [
     "MarketDataLoader",
     "SecEdgarClient",
     "Form4Parser",
+    "XBRLTagResolver",
     "StandardInsiderTransaction",
     "StandardIncomeStatement",
 ]

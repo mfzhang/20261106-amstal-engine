@@ -77,6 +77,11 @@ python_files = ["test_*.py"]
 python_classes = ["Test*"]
 python_functions = ["test_*"]
 addopts = "-v --tb=short"
+filterwarnings = [
+    "ignore:`torch.jit.script` is deprecated:FutureWarning",
+    "ignore:Failing to pass a value to the 'type_params' parameter of 'typing._eval_type':DeprecationWarning",
+    "ignore:Setting the shape on a NumPy array has been deprecated:DeprecationWarning",
+]
 
 [tool.ruff]
 line-length = 100

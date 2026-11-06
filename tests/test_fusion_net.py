@@ -125,17 +125,22 @@ def test_fusion_net_phase3_cross_modal_attention() -> None:
     """Verifies Phase 3 Cross-Modal Attention with event features and temporal sequence."""
     B = 6
     T = 126
-    h_temp = torch.randn(B, 32)
+    gru = AttentionGRUBackbone(input_dim=15, hidden_dim=32, num_threads=2)
+    raw_seq = np.random.randn(B, T, 15).astype(np.float32)
+    h_temp = torch.from_numpy(gru.extract_latent(raw_seq))
+    temporal_seq = torch.from_numpy(gru.extract_sequence(raw_seq))
+    assert temporal_seq.shape == (B, T, 32)
     h_graph = torch.randn(B, 32)
-    temporal_seq = torch.randn(B, T, 32)
 
-    # Active event features: masks at indices 9..11 are 0.0 (active news and insider)
+    # Active event features: masks at indices 9..11 (1.0 = present/active, 0.0 = missing per PRD Section 5.10)
     event_feats = torch.zeros(B, 12)
     event_feats[:, 0] = 0.75  # sentiment
     event_feats[:, 2] = 0.60  # insider score
-    event_feats[:, 9] = 0.0   # news mask: present
-    event_feats[:, 10] = 0.0  # insider mask: present
-    event_feats[:, 11] = 1.0  # 10q mask: missing
+    event_feats[:, 9] = 1.0   # news mask: present
+    event_feats[:, 10] = 1.0  # insider mask: present
+    event_feats[:, 11] = 0.0  # 10q mask: missing
+
+    hmm_probs = torch.tensor([[0.8, 0.15, 0.05]] * B, dtype=torch.float32)
 
     model = ModalityMaskedFusionNet(dropout=0.0)
     logits, h_gated, h_fused = model(
@@ -144,6 +149,7 @@ def test_fusion_net_phase3_cross_modal_attention() -> None:
         kappa=0.50,
         event_features=event_feats,
         temporal_seq=temporal_seq,
+        hmm_probs=hmm_probs,
     )
 
     # Multi-modal latent invariant: (B, 66)
@@ -151,9 +157,9 @@ def test_fusion_net_phase3_cross_modal_attention() -> None:
     assert h_gated.shape == (B, 32)
     assert logits.shape == (B, 3)
 
-    # When all event modalities are missing (masks = 1.0), cross-attention is bypassed
+    # When all event modalities are missing (masks = 0.0, Phase 2 Mode), cross-attention is bypassed
     missing_events = torch.zeros(B, 12)
-    missing_events[:, 9:12] = 1.0
+    missing_events[:, 9:12] = 0.0
     _, _, h_fused_missing = model(
         h_temp,
         h_graph,
@@ -189,7 +195,7 @@ def test_fusion_net_fit_with_event_features() -> None:
     temporal_seq = np.random.randn(B, T, 32).astype(np.float32)
     event_feats = np.zeros((B, 12), dtype=np.float32)
     event_feats[:, 0] = np.random.uniform(-1, 1, size=B)
-    event_feats[:, 9] = 0.0  # active
+    event_feats[:, 9] = 1.0  # active (Phase 3 Mode)
     d_t = np.maximum(0.0, np.random.randn(B, 2).astype(np.float32))
     y = np.random.choice([0, 1, 2], size=B)
 

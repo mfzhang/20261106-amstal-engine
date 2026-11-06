@@ -333,6 +333,37 @@ for name, text in docs_to_check:
                 if rk not in sb:
                     errors.append(f"Missing required key '{rk}' in signal_breakdown in {name}")
 
+# --- Check 11: Engine Source File Existence Audit (PRD Section 9) ---
+required_engine_files = [
+    "src/data/market_loader.py",
+    "src/data/sec_edgar.py",
+    "src/data/universe.py",
+    "src/features/residualizer.py",
+    "src/features/microstructure.py",
+    "src/features/sec_diff.py",
+    "src/features/news_sentiment.py",
+    "src/features/event_decay.py",
+    "src/features/graph_builder.py",
+    "src/models/backbone_gru.py",
+    "src/models/backbone_lgbm.py",
+    "src/models/peer_gat.py",
+    "src/models/regime_hmm.py",
+    "src/models/fusion_net.py",
+    "src/label/triple_barrier.py",
+    "src/label/weights.py",
+    "src/risk/calibration.py",
+    "src/risk/kelly_engine.py",
+    "src/backtest/walk_forward.py",
+    "src/backtest/metrics.py",
+    "src/backtest/engine.py",
+    "src/ipc/uds_server.py",
+    "src/ipc/ws_broadcaster.py",
+    "src/main.py",
+]
+for rel_path in required_engine_files:
+    if not (ENGINE / rel_path).is_file():
+        errors.append(f"Missing required engine source module declared in PRD Section 9: {rel_path}")
+
 print(f"\nAudit complete. Errors: {len(errors)}, Warnings: {len(warnings)}")
 for e in errors:
     print(f" [FAIL] {e}")

@@ -157,3 +157,46 @@ def test_portfolio_l1_normalization_vectorized(rng) -> None:
     assert len(norm_weights) == N
     assert np.all(norm_weights >= 0.0)
     assert np.sum(np.abs(norm_weights)) == pytest.approx(1.0, rel=1e-5)
+
+
+def test_kelly_base_rate_payoff_centering_zero_skill_invariant() -> None:
+    """
+    Verifies PRD Section 5.11.3 (Gate 4 Criterion #2):
+    Base-rate payoff centering ensures that any zero-skill model outputting validation
+    prior probabilities (or uniform 1/3, 1/3, 1/3) produces strictly 0.0% allocation,
+    even under asymmetric +2 sigma / -1 sigma barriers.
+    """
+    sizer = MultiOutcomeKellySizer(round_trip_cost=0.0015)
+    b_upper = 0.08  # +2 sigma
+    b_lower = 0.04  # -1 sigma
+    b_vert = 0.002
+
+    # 1. Uniform (1/3, 1/3, 1/3) zero-skill probabilities -> strictly 0.0%
+    f_uniform = sizer.solve_unconstrained_kelly(
+        p_buy=1.0 / 3.0,
+        p_hold=1.0 / 3.0,
+        p_sell=1.0 / 3.0,
+        b_upper=b_upper,
+        b_lower=b_lower,
+        b_vert=b_vert,
+    )
+    assert f_uniform == 0.0
+
+    # 2. Non-uniform validation prior (e.g. 0.30, 0.35, 0.35):
+    prior = (0.30, 0.35, 0.35)
+    b_u_c, b_l_c, b_v_c = MultiOutcomeKellySizer.center_payoffs(b_upper, b_lower, b_vert, prior_probs=prior)
+    # Expected centered return under prior must equal 0.0
+    expected_prior_return = prior[0] * b_u_c - prior[2] * b_l_c + prior[1] * b_v_c
+    assert expected_prior_return == pytest.approx(0.0, abs=1e-12)
+
+    # Outputting prior probabilities yields strictly 0.0% allocation
+    f_prior = sizer.solve_unconstrained_kelly(
+        p_buy=prior[0],
+        p_hold=prior[1],
+        p_sell=prior[2],
+        b_upper=b_upper,
+        b_lower=b_lower,
+        b_vert=b_vert,
+        prior_probs=prior,
+    )
+    assert f_prior == 0.0

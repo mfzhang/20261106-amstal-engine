@@ -5,7 +5,7 @@ Transforms asynchronous qualitative events into stationary continuous signals:
 2. Decayed Form 4 Insider Clusters & Age (half-life tau = 20 days)
 3. Decayed PEAD Earnings Shocks & Age (half-life tau = 10 days)
 4. Decayed 10-Q Redline Delta & MD&A Catalysts & Staleness (half-life tau = 15 days)
-5. Explicit Modality Missingness Masks (3 binary indicators)
+5. Explicit Modality Masks (3 binary indicators: 0.0 = missing/Phase 2, 1.0 = active/Phase 3)
 Total Output Vector Dimension: exactly 12 channels.
 
 Also computes Signed Smart-Money Divergence [D_t^+, D_t^-] for channels 64..65 of (Batch, 66).
@@ -16,6 +16,8 @@ import math
 from typing import Dict, List, Optional, Tuple, Union
 import numpy as np
 import pandas as pd
+
+from src.data.market_loader import MarketDataLoader
 
 
 @dataclass
@@ -50,6 +52,20 @@ class EventDecayKernel:
         decay_factor = math.exp(- (cls.LN2 / tau) * elapsed_days)
         return float(initial_val * decay_factor)
 
+    @staticmethod
+    def _resolve_effective_date(dt_val: Union[str, pd.Timestamp]) -> pd.Timestamp:
+        """
+        Resolves Point-in-Time effective trading date.
+        If dt_val includes a time-of-day component, enforces the >16:00 America/New_York -> t+1 rule.
+        """
+        if isinstance(dt_val, str) and ("T" in dt_val or ":" in dt_val):
+            eff = MarketDataLoader.apply_pit_cutoff(dt_val)
+            return pd.Timestamp(eff.date())
+        if isinstance(dt_val, pd.Timestamp) and (dt_val.hour != 0 or dt_val.minute != 0 or dt_val.tz is not None):
+            eff = MarketDataLoader.apply_pit_cutoff(dt_val)
+            return pd.Timestamp(eff.date())
+        return pd.Timestamp(dt_val).tz_localize(None)
+
     @classmethod
     def build_event_tensor(
         cls,
@@ -57,49 +73,51 @@ class EventDecayKernel:
         news_event: Optional[Tuple[float, Union[str, pd.Timestamp]]] = None,     # (sentiment, date)
         insider_event: Optional[Tuple[float, Union[str, pd.Timestamp]]] = None,  # (cluster_score, date)
         pead_event: Optional[Tuple[float, Union[str, pd.Timestamp]]] = None,     # (sue_shock, date)
-        sec_10q_event: Optional[Tuple[float, float, Union[str, pd.Timestamp]]] = None, # (risk_delta, mda_score, date)
+        sec_10q_event: Optional[Tuple[float, float, Union[str, pd.Timestamp]]] = None,  # (risk_delta, mda_score, date)
         max_age_cap: float = 63.0,
     ) -> np.ndarray:
         """
         Builds the exact 12-channel event feature vector as of as_of_date.
-        Respects Point-in-Time causality: events occurring strictly after as_of_date are excluded.
+        Respects Point-in-Time causality: events occurring strictly after as_of_date
+        (or filed after 16:00 ET on as_of_date) are excluded.
+        Modality Masks (channels 9..11): 0.0 = Missing (Phase 2 Mode), 1.0 = Active (Phase 3 Mode).
         """
-        current_dt = pd.Timestamp(as_of_date)
+        current_dt = pd.Timestamp(as_of_date).tz_localize(None)
         features = np.zeros(cls.NUM_CHANNELS, dtype=np.float32)
 
-        # Modality Missingness Masks: default 1.0 (missing)
-        mask_news = 1.0
-        mask_insider = 1.0
-        mask_10q = 1.0
+        # Modality Masks (PRD Section 5.10): 0.0 = Missing/Inactive, 1.0 = Present/Active
+        mask_news = 0.0
+        mask_insider = 0.0
+        mask_10q = 0.0
 
         # Channel 0-1: FinBERT Sentiment & Age
         if news_event is not None:
             score, dt_str = news_event
-            evt_dt = pd.Timestamp(dt_str)
+            evt_dt = cls._resolve_effective_date(dt_str)
             if evt_dt <= current_dt:
-                elapsed = max(0.0, (current_dt - evt_dt).days)
+                elapsed = max(0.0, float((current_dt - evt_dt).days))
                 if elapsed <= max_age_cap:
                     features[0] = cls.compute_decay(score, elapsed, cls.TAU_NEWS)
                     features[1] = elapsed
-                    mask_news = 0.0
+                    mask_news = 1.0
 
         # Channel 2-3: Form 4 Insider Cluster & Age
         if insider_event is not None:
             score, dt_str = insider_event
-            evt_dt = pd.Timestamp(dt_str)
+            evt_dt = cls._resolve_effective_date(dt_str)
             if evt_dt <= current_dt:
-                elapsed = max(0.0, (current_dt - evt_dt).days)
+                elapsed = max(0.0, float((current_dt - evt_dt).days))
                 if elapsed <= max_age_cap:
                     features[2] = cls.compute_decay(score, elapsed, cls.TAU_INSIDER)
                     features[3] = elapsed
-                    mask_insider = 0.0
+                    mask_insider = 1.0
 
         # Channel 4-5: PEAD Earnings Shock & Age
         if pead_event is not None:
             sue, dt_str = pead_event
-            evt_dt = pd.Timestamp(dt_str)
+            evt_dt = cls._resolve_effective_date(dt_str)
             if evt_dt <= current_dt:
-                elapsed = max(0.0, (current_dt - evt_dt).days)
+                elapsed = max(0.0, float((current_dt - evt_dt).days))
                 if elapsed <= max_age_cap:
                     features[4] = cls.compute_decay(sue, elapsed, cls.TAU_PEAD)
                     features[5] = elapsed
@@ -107,16 +125,16 @@ class EventDecayKernel:
         # Channel 6-8: 10-Q Item 1A Risk Delta, MD&A Catalyst Score & Staleness Age
         if sec_10q_event is not None:
             risk_delta, mda_score, dt_str = sec_10q_event
-            evt_dt = pd.Timestamp(dt_str)
+            evt_dt = cls._resolve_effective_date(dt_str)
             if evt_dt <= current_dt:
-                elapsed = max(0.0, (current_dt - evt_dt).days)
+                elapsed = max(0.0, float((current_dt - evt_dt).days))
                 if elapsed <= max_age_cap:
                     features[6] = cls.compute_decay(risk_delta, elapsed, cls.TAU_SEC_10Q)
                     features[7] = cls.compute_decay(mda_score, elapsed, cls.TAU_SEC_10Q)
                     features[8] = elapsed
-                    mask_10q = 0.0
+                    mask_10q = 1.0
 
-        # Channel 9-11: Modality Missingness Masks
+        # Channel 9-11: Modality Masks (0.0 = Missing, 1.0 = Active)
         features[9] = mask_news
         features[10] = mask_insider
         features[11] = mask_10q

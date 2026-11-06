@@ -66,11 +66,15 @@ class AttentionGRUBackbone:
                         nn.Linear(32, n_cls),
                     )
 
-                def forward_latent(self, x: torch.Tensor) -> torch.Tensor:
+                def forward_sequence(self, x: torch.Tensor) -> torch.Tensor:
                     # x: (Batch, T, input_dim)
                     gru_out, _ = self.gru(x)  # (Batch, T, hidden_dim)
                     attn_out, _ = self.attn(gru_out, gru_out, gru_out)  # (Batch, T, hidden_dim)
-                    norm_out = self.ln(gru_out + attn_out)  # Residual connection + LayerNorm
+                    norm_out = self.ln(gru_out + attn_out)  # Residual connection + LayerNorm: (Batch, T, hidden_dim)
+                    return norm_out
+
+                def forward_latent(self, x: torch.Tensor) -> torch.Tensor:
+                    norm_out = self.forward_sequence(x)
                     pooled = norm_out[:, -1, :]  # Last time step pooling: (Batch, hidden_dim)
                     return pooled
 
@@ -109,9 +113,34 @@ class AttentionGRUBackbone:
             # Pool across time and project to 32 dimensions
             pooled = np.mean(X_arr, axis=1)  # (Batch, input_dim)
             if pooled.shape[1] < self.hidden_dim:
-                pad = np.zeros((len(pooled), self.hidden_dim - pooled.shape[1]))
+                pad = np.zeros((len(pooled), self.hidden_dim - pooled.shape[1]), dtype=np.float32)
                 return np.hstack([pooled, pad])
             return pooled[:, : self.hidden_dim]
+
+    def extract_sequence(self, X: np.ndarray) -> np.ndarray:
+        """
+        Extracts the full temporal sequence representation (Batch, T, 32) from the
+        1-Layer GRU + 2-Head Self-Attention backbone to serve as Key/Value (K, V)
+        in Phase 3 Cross-Modal Attention (PRD Section 5.10).
+        """
+        X_arr = np.asarray(X, dtype=np.float32)
+        if X_arr.ndim == 2:
+            X_arr = np.expand_dims(X_arr, axis=0)
+
+        if self.torch_available and self.model is not None:
+            import torch
+
+            self.model.eval()
+            with torch.no_grad():
+                tensor_in = torch.from_numpy(X_arr).to("cpu")
+                seq_out = self.model.forward_sequence(tensor_in).cpu().numpy()
+            return seq_out.astype(np.float32)
+        else:
+            B, T, D = X_arr.shape
+            if D < self.hidden_dim:
+                pad = np.zeros((B, T, self.hidden_dim - D), dtype=np.float32)
+                return np.concatenate([X_arr, pad], axis=-1)
+            return X_arr[:, :, : self.hidden_dim]
 
     def fit(
         self,

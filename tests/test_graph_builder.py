@@ -118,3 +118,39 @@ def test_graph_builder_batching_and_root_slicing() -> None:
     root_vals = batch.x[root_indices, 0]
     expected_vals = torch.tensor([1.0, 2.0, 3.0, 4.0], dtype=torch.float32)
     assert torch.allclose(root_vals, expected_vals)
+
+
+def test_graph_builder_prd_10d_node_schema_and_roles() -> None:
+    """Verifies PRD Section 5.7 (Total_Nodes, 10) node schema, categorical roles, and GICS + Lead-Lag peers."""
+    selector = UniverseSelector(target_size=250)
+    builder = GraphBuilder(universe_selector=selector, feature_dim=10)
+
+    dates = pd.bdate_range("2023-01-01", periods=80)
+    rng = np.random.default_rng(7)
+    peers = selector.get_peers("NVDA", min_count=8)
+    df_res = pd.DataFrame(
+        rng.normal(0, 0.01, size=(len(dates), len(peers) + 1)),
+        index=dates,
+        columns=["NVDA"] + peers,
+    )
+
+    gics_4, lead_lag_4, corr_map = builder.select_gics_and_lead_lag_peers(
+        "NVDA", residual_returns=df_res, as_of_date="2023-03-15"
+    )
+    assert len(gics_4) == 4
+    assert len(lead_lag_4) == 4
+    assert len(set(gics_4).intersection(set(lead_lag_4))) == 0
+
+    vec_target = GraphBuilder.build_prd_10d_node_vector(res_20d=0.08, res_5d=0.03, node_role=0.0)
+    assert vec_target.shape == (10,)
+
+    subgraph = builder.build_subgraph(
+        target_ticker="NVDA",
+        node_features={"NVDA": vec_target},
+        peer_tickers=gics_4 + lead_lag_4,
+        pairwise_corrs=corr_map,
+        feature_dim=10,
+    )
+    assert subgraph.x.shape == (10, 10)
+    expected_roles = torch.tensor([0.0, 0.33, 0.33, 0.33, 0.33, 0.66, 0.66, 0.66, 0.66, 1.0])
+    assert torch.allclose(subgraph.x[:, 9], expected_roles, atol=1e-5)

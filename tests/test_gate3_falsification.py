@@ -138,16 +138,16 @@ def test_gate3_post_1600_point_in_time_acceptance_invariant() -> None:
     )
     assert t_pre[2] == pytest.approx(0.85, abs=1e-5)
     assert t_pre[3] == 0.0  # 0 days elapsed
-    assert t_pre[10] == 0.0  # Insider mask is active (not missing)
+    assert t_pre[10] == 1.0  # Insider mask is active (1.0 = Phase 3 Active per PRD Section 5.10)
 
     # The post-16:00 event is NOT accessible on 2023-04-10 because effective date is 2023-04-11
     t_post = EventDecayKernel.build_event_tensor(
         as_of_date=as_of,
         insider_event=(0.85, effective_post),
     )
-    # Channel 2 should be 0.0 and mask should be 1.0 (missing)
+    # Channel 2 should be 0.0 and mask should be 0.0 (missing/unobserved)
     assert t_post[2] == 0.0
-    assert t_post[10] == 1.0  # Mask indicates missing/unobserved
+    assert t_post[10] == 0.0  # Mask indicates missing/unobserved (0.0 = Phase 2 Missing)
 
     # Causal invariance check:
     # Corrupt future events (effective 2023-04-11 and later) with arbitrary noise

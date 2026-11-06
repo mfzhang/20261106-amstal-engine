@@ -21,7 +21,7 @@ class PeerGAT(nn.Module):
 
     def __init__(
         self,
-        in_channels: int = 15,
+        in_channels: int = 10,
         hidden_dim: int = 32,
         num_heads: int = 2,
         num_classes: int = 3,
@@ -92,6 +92,15 @@ class PeerGAT(nn.Module):
         2. logits: (Batch, 3) classification logits from target representation
         """
         x = data.x
+        if x.shape[1] > self.in_channels:
+            x = x[:, : self.in_channels]
+        elif x.shape[1] < self.in_channels:
+            pad = torch.zeros(
+                (x.shape[0], self.in_channels - x.shape[1]),
+                dtype=x.dtype,
+                device=x.device,
+            )
+            x = torch.cat([x, pad], dim=1)
         edge_index = data.edge_index
         edge_attr = data.edge_attr if hasattr(data, "edge_attr") else None
 

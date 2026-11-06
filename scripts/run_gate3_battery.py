@@ -118,11 +118,11 @@ def run_battery() -> int:
 
     # Pre-cutoff (15:30 ET) event is accessible on day t
     t_pre = EventDecayKernel.build_event_tensor(as_of_date=as_of, insider_event=(0.85, "2023-04-10"))
-    pre_active = (t_pre[2] == 0.85) and (t_pre[10] == 0.0)
+    pre_active = (t_pre[2] == 0.85) and (t_pre[10] == 1.0)
 
     # Post-cutoff (16:45 ET) event effective date is 2023-04-11, so inaccessible on 2023-04-10
     t_post = EventDecayKernel.build_event_tensor(as_of_date=as_of, insider_event=(0.85, "2023-04-11"))
-    post_masked = (t_post[2] == 0.0) and (t_post[10] == 1.0)
+    post_masked = (t_post[2] == 0.0) and (t_post[10] == 0.0)
 
     # Invariance across future mutations
     t_clean = EventDecayKernel.build_event_tensor(
