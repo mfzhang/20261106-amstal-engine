@@ -15,5 +15,13 @@ except ImportError:
 from src.models.backbone_gru import AttentionGRUBackbone
 from src.models.backbone_lgbm import LightGBMBackbone
 from src.models.regime_hmm import RegimeHMM
+from src.models.peer_gat import PeerGAT
+from src.models.fusion_net import ModalityMaskedFusionNet
 
-__all__ = ["LightGBMBackbone", "AttentionGRUBackbone", "RegimeHMM"]
+__all__ = [
+    "LightGBMBackbone",
+    "AttentionGRUBackbone",
+    "RegimeHMM",
+    "PeerGAT",
+    "ModalityMaskedFusionNet",
+]

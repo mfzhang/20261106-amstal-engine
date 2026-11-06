@@ -533,6 +533,24 @@ class UniverseSelector:
             return rec
         return None
 
+    def get_peers(self, ticker: str, min_count: int = 8) -> List[str]:
+        """Returns peer tickers from the same GICS sub-industry (or sector if sub-industry has < min_count)."""
+        if ticker not in self._security_master:
+            return []
+        target_rec = self._security_master[ticker]
+        sub_industry_peers = [
+            t for t, rec in self._security_master.items()
+            if t != ticker and rec.gics_sub_industry == target_rec.gics_sub_industry and rec.active
+        ]
+        if len(sub_industry_peers) >= min_count:
+            return sorted(sub_industry_peers)
+        # Expand to same GICS sector
+        sector_peers = [
+            t for t, rec in self._security_master.items()
+            if t != ticker and rec.gics_sector == target_rec.gics_sector and rec.active
+        ]
+        return sorted(sector_peers)
+
     def get_annual_snapshot(self, year: int) -> List[str]:
         """
         Returns Point-in-Time universe constituent snapshot as of January 1 of year.
