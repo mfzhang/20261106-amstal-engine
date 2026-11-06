@@ -109,23 +109,25 @@ def run_battery() -> int:
     # TEST 3: Net-of-15 bps Friction Hurdle on Predictive Alpha
     # ---------------------------------------------------------
     print("\n[TEST 3/5] Executing Net-of-15 bps Friction Hurdle...")
-    latent_signal = rng.normal(0, 1, size=total_samples)
-    X_signal = rng.normal(0, 1, size=(total_samples, 105))
+    rng_test3 = np.random.default_rng(42)
+    barrier_ends_sig = sample_days + rng_test3.integers(2, 6, size=total_samples)
+    latent_signal = rng_test3.normal(0, 1, size=total_samples)
+    X_signal = rng_test3.normal(0, 1, size=(total_samples, 105))
     for col in range(5):
-        X_signal[:, col] = 0.3 * latent_signal + rng.normal(0, 0.9, size=total_samples)
+        X_signal[:, col] = 0.3 * latent_signal + rng_test3.normal(0, 0.9, size=total_samples)
 
-    r_signal = 0.005 * latent_signal + rng.normal(0.0003, 0.01, size=total_samples)
+    r_signal = 0.005 * latent_signal + rng_test3.normal(0.0003, 0.01, size=total_samples)
     y_signal = np.ones(total_samples, dtype=int)
     y_signal[r_signal > 0.004] = 0
     y_signal[r_signal < -0.004] = 2
-    weights = rng.uniform(0.8, 1.2, size=total_samples)
+    weights = rng_test3.uniform(0.8, 1.2, size=total_samples)
 
     bt_signal = WalkForwardBacktester(splitter=splitter, round_trip_cost=0.0015)
     res_signal = bt_signal.run(
         X=X_signal,
         y=y_signal,
         sample_days=sample_days,
-        barrier_end_days=barrier_ends,
+        barrier_end_days=barrier_ends_sig,
         realized_returns=r_signal,
         sample_weights=weights,
         total_days=total_days,

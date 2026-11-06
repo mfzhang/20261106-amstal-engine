@@ -250,6 +250,10 @@ class JsonRpcUdsServer:
             self.handle_client,
             path=self.socket_path,
         )
+        try:
+            os.chmod(self.socket_path, 0o600)
+        except OSError:
+            pass
         self.is_running = True
 
     def stop(self) -> None:

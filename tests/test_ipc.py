@@ -137,6 +137,13 @@ def test_qare_signal_frame_schema() -> None:
     assert frame["macro_regime"]["state_index"] == 0
     assert "filtered_probabilities" in frame["macro_regime"]
 
+    # Signal breakdown block: all 13 keys from PRD Section 2.4.2
+    assert len(frame["signal_breakdown"]) == 13
+    assert "decayed_finbert_sentiment" in frame["signal_breakdown"]
+    assert "decayed_form4_insider_cluster" in frame["signal_breakdown"]
+    assert "decayed_pead_shock" in frame["signal_breakdown"]
+    assert "peer_gat_spillover" in frame["signal_breakdown"]
+
     # Calibration block
     assert frame["calibration"]["temperature"] == 1.34
     cal_probs = frame["calibration"]["calibrated_probabilities"]

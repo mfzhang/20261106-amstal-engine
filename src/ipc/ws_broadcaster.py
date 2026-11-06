@@ -50,6 +50,14 @@ def build_qare_signal_frame(
         "intraday_return_rank": 0.15,
         "amihud_illiquidity_rank": -0.31,
         "closing_power_rank": 0.65,
+        "decayed_finbert_sentiment": 0.54,
+        "decayed_form4_insider_cluster": 0.82,
+        "decayed_pead_shock": 0.35,
+        "decayed_10q_legal_risk_delta": -0.04,
+        "decayed_mda_catalyst_score": 0.28,
+        "peer_gat_spillover": 0.49,
+        "smart_money_divergence_pos": 0.0,
+        "smart_money_divergence_neg": 0.19,
     }
 
     return {

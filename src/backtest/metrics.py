@@ -64,14 +64,35 @@ class BacktestMetrics:
         return float(np.mean(net_returns) / (np.std(net_returns) + 1e-12) * np.sqrt(periods_per_year))
 
     @staticmethod
+    def aggregate_daily_returns(
+        returns: np.ndarray,
+        day_indices: Optional[np.ndarray] = None,
+    ) -> np.ndarray:
+        """
+        Aggregates cross-sectional returns by trading day.
+        If day_indices is provided, computes mean return per unique day.
+        Otherwise returns the array unchanged.
+        """
+        r = np.asarray(returns, dtype=np.float64)
+        if day_indices is None or len(day_indices) == 0:
+            return r
+        days = np.asarray(day_indices)
+        if len(days) != len(r):
+            return r
+        unique_days, inverse = np.unique(days, return_inverse=True)
+        counts = np.bincount(inverse)
+        sums = np.bincount(inverse, weights=r)
+        return sums / np.maximum(counts, 1)
+
+    @staticmethod
     def max_drawdown(returns: np.ndarray) -> float:
         """Computes maximum peak-to-trough drawdown from a return series."""
         r = np.asarray(returns, dtype=np.float64)
         if len(r) == 0:
             return 0.0
-        cum_equity = np.cumprod(1.0 + r)
+        cum_equity = np.cumprod(np.maximum(1.0 + r, 0.0))
         peak = np.maximum.accumulate(cum_equity)
-        drawdown = (cum_equity - peak) / (peak + 1e-12)
+        drawdown = (cum_equity - peak) / np.maximum(peak, 1e-12)
         return float(np.abs(np.min(drawdown))) if len(drawdown) > 0 else 0.0
 
     @staticmethod

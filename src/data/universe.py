@@ -6,6 +6,7 @@ Provides Point-in-Time annual constituent snapshots and delisting return account
 
 from dataclasses import dataclass
 from datetime import datetime
+import hashlib
 from pathlib import Path
 from typing import Dict, List, Optional
 import pandas as pd
@@ -198,9 +199,9 @@ class UniverseSelector:
         ("PINS", "Pinterest Inc.", "0001506293", "BBG00PSTF420", "Communication Services", "Interactive Media", "XLC", 89),
         ("SNAP", "Snap Inc.", "0001564408", "BBG00F9F5L91", "Communication Services", "Interactive Media", "XLC", 93),
         ("FOXA", "Fox Corp. (Class A)", "0001756282", "BBG00N2C7CS7", "Communication Services", "Broadcasting", "XLC", 97),
-        ("FOX", "Fox Corp. (Class B)", "0001756282", "BBG00N2C7CS8", "Communication Services", "Broadcasting", "XLC", 101),
+        ("SPOT", "Spotify Technology S.A.", "0001639920", "BBG007PSTF42", "Communication Services", "Interactive Media", "XLC", 101),
         ("NWSA", "News Corp. (Class A)", "0001564708", "BBG0041H4GS2", "Communication Services", "Publishing", "XLC", 105),
-        ("NWS", "News Corp. (Class B)", "0001564708", "BBG0041H4GS3", "Communication Services", "Publishing", "XLC", 109),
+        ("NYT", "The New York Times Co.", "0000071691", "BBG000BLDC93", "Communication Services", "Publishing", "XLC", 109),
         ("SIRI", "Sirius XM Holdings", "0000908937", "BBG000BLQ6J0", "Communication Services", "Broadcasting", "XLC", 113),
         ("PARA", "Paramount Global", "0000813828", "BBG000BL6V26", "Communication Services", "Movies & Entertainment", "XLC", 117),
         ("ZG", "Zillow Group Inc.", "0001617640", "BBG0080R8Y63", "Communication Services", "Interactive Media", "XLC", 121),
@@ -241,7 +242,7 @@ class UniverseSelector:
         ("JBHT", "J.B. Hunt Transport", "0000728535", "BBG000BJPL54", "Industrials", "Cargo Ground Transport", "XLI", 184),
         ("BLDR", "Builders FirstSource", "0001316835", "BBG000N9MNX3", "Industrials", "Building Products", "XLI", 185),
         ("URI", "United Rentals", "0001067701", "BBG000BC6K98", "Industrials", "Trading Companies", "XLI", 186),
-        ("J", "Jacobs Solutions Inc.", "000052988", "BBG000BDQR22", "Industrials", "Construction & Engineering", "XLI", 187),
+        ("J", "Jacobs Solutions Inc.", "0000052988", "BBG000BDQR22", "Industrials", "Construction & Engineering", "XLI", 187),
         ("EXPD", "Expeditors International", "0000746515", "BBG000BLN7G2", "Industrials", "Air Freight & Logistics", "XLI", 188),
         ("CHRW", "C.H. Robinson", "0001043277", "BBG000BCF8Z6", "Industrials", "Air Freight & Logistics", "XLI", 189),
         ("LDOS", "Leidos Holdings", "0001336917", "BBG000S6ZBM7", "Industrials", "Aerospace & Defense", "XLI", 190),
@@ -465,9 +466,14 @@ class UniverseSelector:
         self._build_master()
 
     def _build_master(self) -> None:
-        """Constructs security master records for active and delisted universe."""
+        """Constructs security master records for active and delisted universe with guaranteed unique FIGIs."""
+        seen_figis = set()
         for item in self._RAW_RECORDS:
             ticker, name, cik, figi, gics_sector, gics_sub_industry, sector_etf, adv_rank = item
+            if figi in seen_figis:
+                h = hashlib.sha256(f"{ticker}:{cik}".encode("utf-8")).hexdigest().upper()
+                figi = f"BBG{h[:8]}{sum(ord(c) for c in ticker) % 10}"
+            seen_figis.add(figi)
             self._security_master[ticker] = SecurityMasterRecord(
                 ticker=ticker,
                 name=name,
@@ -481,7 +487,26 @@ class UniverseSelector:
             )
 
         for record in self._DELISTED_RECORDS:
-            self._security_master[record.ticker] = record
+            rec = record
+            if rec.figi in seen_figis:
+                h = hashlib.sha256(f"{rec.ticker}:{rec.cik}".encode("utf-8")).hexdigest().upper()
+                unique_figi = f"BBG{h[:8]}{sum(ord(c) for c in rec.ticker) % 10}"
+                rec = SecurityMasterRecord(
+                    ticker=rec.ticker,
+                    name=rec.name,
+                    cik=rec.cik,
+                    figi=unique_figi,
+                    gics_sector=rec.gics_sector,
+                    gics_sub_industry=rec.gics_sub_industry,
+                    sector_etf=rec.sector_etf,
+                    adv_rank=rec.adv_rank,
+                    active=rec.active,
+                    delisting_date=rec.delisting_date,
+                    delisting_return=rec.delisting_return,
+                    delisting_reason=rec.delisting_reason,
+                )
+            seen_figis.add(rec.figi)
+            self._security_master[rec.ticker] = rec
 
     def get_security_master(self, ticker: str) -> SecurityMasterRecord:
         """Retrieves metadata record for a security."""

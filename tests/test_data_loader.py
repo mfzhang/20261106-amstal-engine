@@ -135,6 +135,20 @@ def test_duckdb_stateless_query_and_atomic_write(tmp_path: Path) -> None:
     assert list(queried.columns) == ["open", "close", "volume"]
     assert queried.index.is_monotonic_increasing
 
+    # Security: SQL injection prevention
+    with pytest.raises(ValueError, match="Invalid column identifier"):
+        loader.query_parquet_duckdb(target_file, columns=["open; DROP TABLE students;"])
+
+    # Test save_ticker_daily non-mutation and redundant timestamp column handling
+    df_with_ts = synth_df.reset_index()
+    orig_cols = list(df_with_ts.columns)
+    loader.save_ticker_daily("NVDA_TEST", df_with_ts)
+    assert list(df_with_ts.columns) == orig_cols  # Original not mutated
+    loaded_nvda = loader.load_ticker_daily("NVDA_TEST")
+    assert loaded_nvda is not None
+    assert isinstance(loaded_nvda.index, pd.DatetimeIndex)
+    assert "timestamp" not in loaded_nvda.columns
+
 
 def test_pit_cutoff_1600_rule() -> None:
     # 1. 15:59:59 America/New_York (before close) -> remains current date
@@ -225,3 +239,23 @@ def test_fetch_or_load_daily_synthetic_cache(tmp_path: Path) -> None:
     # Second call should load directly from cache
     df_cached = loader.fetch_or_load_daily("AAPL", start_date="2023-01-01", end_date="2023-03-31")
     pd.testing.assert_frame_equal(df, df_cached, check_freq=False)
+
+
+def test_sec_edgar_rate_limiter() -> None:
+    from src.data.sec_edgar import SecEdgarClient, TokenBucketRateLimiter
+    import time
+
+    # Test User-Agent validation
+    with pytest.raises(ValueError, match="SEC_EDGAR_USER_AGENT must be configured"):
+        SecEdgarClient(user_agent="")
+
+    with pytest.raises(ValueError, match="missing a valid contact email"):
+        SecEdgarClient(user_agent="AmstalResearch")
+
+    client = SecEdgarClient(user_agent="AmstalResearch quant@amstal.internal", rate_limit_per_sec=20.0)
+    # Burst 5 slots should not block significantly
+    t0 = time.monotonic()
+    for _ in range(5):
+        client.acquire_slot()
+    elapsed = time.monotonic() - t0
+    assert elapsed < 0.1  # Fast burst within capacity

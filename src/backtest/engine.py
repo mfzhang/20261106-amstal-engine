@@ -121,6 +121,7 @@ class WalkForwardBacktester:
         all_oos_net: List[np.ndarray] = []
         all_oos_labels: List[np.ndarray] = []
         all_oos_trades: List[np.ndarray] = []
+        all_oos_days: List[np.ndarray] = []
 
         for fold in self.splitter.split_panel(
             sample_days=days,
@@ -153,6 +154,7 @@ class WalkForwardBacktester:
             # 4. Predict calibrated probabilities on OOS test fold
             X_test, y_test = X_arr[test_idx], y_arr[test_idx]
             r_test = returns[test_idx]
+            test_days = days[test_idx]
 
             if hasattr(model, "predict_calibrated_proba"):
                 probs = model.predict_calibrated_proba(X_test)
@@ -174,17 +176,21 @@ class WalkForwardBacktester:
 
             net_ret = trades * r_test - np.abs(trades) * self.round_trip_cost
 
+            # Aggregate cross-sectional returns by day to avoid distorting annualization
+            fold_daily_gross = BacktestMetrics.aggregate_daily_returns(trades * r_test, test_days)
+            fold_daily_net = BacktestMetrics.aggregate_daily_returns(net_ret, test_days)
+
             # Evaluate fold metrics
             rank_ic = BacktestMetrics.rank_information_coefficient(scores, r_test)
             brier = BacktestMetrics.brier_score(probs, y_test)
             sharpe_gross = BacktestMetrics.annualized_sharpe(
-                trades * r_test, trades, include_costs=False
+                fold_daily_gross, np.ones_like(fold_daily_gross), include_costs=False
             )
             sharpe_net = BacktestMetrics.annualized_sharpe(
-                trades * r_test, trades, include_costs=True
+                fold_daily_net, np.zeros_like(fold_daily_net), include_costs=False
             )
-            cum_ret = float(np.sum(net_ret))
-            mdd = BacktestMetrics.max_drawdown(net_ret)
+            cum_ret = float(np.sum(fold_daily_net))
+            mdd = BacktestMetrics.max_drawdown(fold_daily_net)
             wr = BacktestMetrics.win_rate(net_ret, trade_mask=(trades != 0.0))
 
             fold_metric = FoldMetrics(
@@ -209,6 +215,7 @@ class WalkForwardBacktester:
             all_oos_net.append(net_ret)
             all_oos_labels.append(y_test)
             all_oos_trades.append(trades)
+            all_oos_days.append(test_days)
 
         if not fold_metrics_list:
             return BacktestResult()
@@ -220,6 +227,7 @@ class WalkForwardBacktester:
         oos_net = np.concatenate(all_oos_net)
         oos_y = np.concatenate(all_oos_labels)
         oos_t = np.concatenate(all_oos_trades)
+        oos_days = np.concatenate(all_oos_days)
 
         ic_vals = [f.rank_ic for f in fold_metrics_list]
         mean_ic = float(np.mean(ic_vals))
@@ -227,13 +235,16 @@ class WalkForwardBacktester:
         ic_ir = float(mean_ic / (std_ic + 1e-12)) if len(ic_vals) > 1 else 0.0
 
         overall_brier = BacktestMetrics.brier_score(oos_p, oos_y)
+        overall_daily_gross = BacktestMetrics.aggregate_daily_returns(oos_r * oos_t, oos_days)
+        overall_daily_net = BacktestMetrics.aggregate_daily_returns(oos_net, oos_days)
+
         overall_gross_sharpe = BacktestMetrics.annualized_sharpe(
-            oos_r * oos_t, oos_t, include_costs=False
+            overall_daily_gross, np.ones_like(overall_daily_gross), include_costs=False
         )
         overall_net_sharpe = BacktestMetrics.annualized_sharpe(
-            oos_r * oos_t, oos_t, include_costs=True
+            overall_daily_net, np.zeros_like(overall_daily_net), include_costs=False
         )
-        overall_mdd = BacktestMetrics.max_drawdown(oos_net)
+        overall_mdd = BacktestMetrics.max_drawdown(overall_daily_net)
         overall_wr = BacktestMetrics.win_rate(oos_net, trade_mask=(oos_t != 0.0))
         total_trades = int(np.sum(oos_t != 0.0))
 

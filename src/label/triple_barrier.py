@@ -131,10 +131,12 @@ class TripleBarrierLabeler:
         valid_indices = []
 
         for i in range(w, n - h):
-            hist_eps = eps_vals[i - w : i]
-            future_eps = eps_vals[i : i + h]
+            # Causal historical window [t-w+1, t] (inclusive of day t)
+            hist_eps = eps_vals[i - w + 1 : i + 1]
+            # Strictly forward out-of-sample path [t+1, t+h] to eliminate same-day lookahead leak
+            future_eps = eps_vals[i + 1 : i + 1 + h]
             vol_scale = self.compute_volatility_scale(hist_eps)
-            future_dates = dates[i : i + h].tolist()
+            future_dates = dates[i + 1 : i + 1 + h].tolist()
 
             res = self.label_path(
                 current_idx=i,

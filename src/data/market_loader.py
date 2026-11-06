@@ -7,6 +7,7 @@ Enforces Point-in-Time (PIT) cutoff at 16:00 America/New_York to eliminate look-
 from datetime import datetime, time as dtime, timedelta
 import os
 from pathlib import Path
+import re
 import time
 from typing import List, Optional, Union
 
@@ -105,15 +106,18 @@ class MarketDataLoader:
 
         if not isinstance(df.index, pd.DatetimeIndex):
             if "timestamp" in df.columns:
-                df.index = pd.to_datetime(df["timestamp"])
+                temp_idx = pd.to_datetime(df["timestamp"])
+                if not temp_idx.is_monotonic_increasing:
+                    raise ValueError("Market data timestamps must be strictly monotonic increasing.")
+                if temp_idx.has_duplicates:
+                    raise ValueError("Market data timestamps contain duplicates.")
             else:
                 raise ValueError("DataFrame index must be a DatetimeIndex or contain 'timestamp' column.")
-
-        if not df.index.is_monotonic_increasing:
-            raise ValueError("Market data timestamps must be strictly monotonic increasing.")
-
-        if df.index.has_duplicates:
-            raise ValueError("Market data timestamps contain duplicates.")
+        else:
+            if not df.index.is_monotonic_increasing:
+                raise ValueError("Market data timestamps must be strictly monotonic increasing.")
+            if df.index.has_duplicates:
+                raise ValueError("Market data timestamps contain duplicates.")
 
         lower_cols = [c.lower() for c in df.columns]
         for col in MarketDataLoader.REQUIRED_DAILY_COLUMNS:
@@ -165,10 +169,14 @@ class MarketDataLoader:
         try:
             # Guarantee timestamp is fetched so we can set index
             if columns:
+                col_regex = re.compile(r"^[A-Za-z0-9_]+$")
+                for c in columns:
+                    if not col_regex.match(c):
+                        raise ValueError(f"Invalid column identifier: {c!r}")
                 lower_cols = [c.lower() for c in columns]
-                query_cols = list(columns)
+                query_cols = [f'"{c}"' for c in columns]
                 if "timestamp" not in lower_cols:
-                    query_cols.append("timestamp")
+                    query_cols.append('"timestamp"')
                 col_sql = ", ".join(query_cols)
             else:
                 col_sql = "*"
@@ -205,9 +213,15 @@ class MarketDataLoader:
 
     def save_ticker_daily(self, ticker: str, df: pd.DataFrame) -> Path:
         """Validates and atomically writes daily OHLCV Parquet partition for ticker."""
-        self.validate_market_data(df)
+        df_copy = df.copy()
+        if not isinstance(df_copy.index, pd.DatetimeIndex) and "timestamp" in df_copy.columns:
+            df_copy.index = pd.to_datetime(df_copy["timestamp"])
+        if "timestamp" in df_copy.columns:
+            df_copy = df_copy.drop(columns=["timestamp"])
+        df_copy.index.name = "timestamp"
+        self.validate_market_data(df_copy)
         target = self.daily_dir / f"{ticker}.parquet"
-        self.atomic_write_parquet(df, target)
+        self.atomic_write_parquet(df_copy, target)
         return target
 
     def generate_synthetic_daily(
@@ -292,7 +306,13 @@ class MarketDataLoader:
 
                 df_yf = yf.download(ticker, start=start_date, end=end_date, progress=False, auto_adjust=True)
                 if df_yf is not None and not df_yf.empty:
-                    df_yf.columns = [c.lower() for c in df_yf.columns]
+                    if isinstance(df_yf.columns, pd.MultiIndex):
+                        df_yf.columns = [
+                            c[0].lower() if isinstance(c, tuple) else str(c).lower()
+                            for c in df_yf.columns
+                        ]
+                    else:
+                        df_yf.columns = [str(c).lower() for c in df_yf.columns]
                     df_yf.index.name = "timestamp"
                     if "vwap" not in df_yf.columns:
                         df_yf["vwap"] = (df_yf["high"] + df_yf["low"] + df_yf["close"]) / 3.0

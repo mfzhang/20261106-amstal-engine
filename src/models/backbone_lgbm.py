@@ -97,7 +97,14 @@ class LightGBMBackbone:
         if not self.is_fitted_ or self.model is None:
             raise RuntimeError("Model has not been fitted.")
         X_arr = np.asarray(X, dtype=np.float64)
-        probs = self.model.predict_proba(X_arr)
+        raw_probs = self.model.predict_proba(X_arr)
+        if hasattr(self.model, "classes_") and len(self.model.classes_) < self.NUM_CLASSES:
+            probs = np.zeros((len(X_arr), self.NUM_CLASSES), dtype=np.float64)
+            for col_idx, cls_label in enumerate(self.model.classes_):
+                if 0 <= cls_label < self.NUM_CLASSES:
+                    probs[:, int(cls_label)] = raw_probs[:, col_idx]
+        else:
+            probs = raw_probs
         # Normalize to strictly sum to 1.0
         row_sums = probs.sum(axis=1, keepdims=True)
         return probs / np.maximum(row_sums, 1e-12)

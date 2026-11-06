@@ -26,32 +26,77 @@ class RegimeHMM:
         2: 0.25,  # Quarter-Kelly in high volatility / turbulent regime
     }
 
-    def __init__(self, n_iter: int = 30, random_state: int = 42) -> None:
+    def __init__(
+        self,
+        n_iter: int = 30,
+        random_state: int = 42,
+        standardize: bool = True,
+        n_fits: int = 10,
+    ) -> None:
         self.n_iter = n_iter
         self.random_state = random_state
+        self.standardize = standardize
+        self.n_fits = n_fits
+        self.mean_: Optional[np.ndarray] = None         # (2,)
+        self.std_: Optional[np.ndarray] = None          # (2,)
         self.means_: Optional[np.ndarray] = None        # (3, 2)
         self.covars_: Optional[np.ndarray] = None       # (3, 2) or (3, 2, 2)
         self.transmat_: Optional[np.ndarray] = None     # (3, 3)
         self.startprob_: Optional[np.ndarray] = None    # (3,)
         self.state_order_: Optional[np.ndarray] = None  # 1D index mapping (3,)
 
+    def transform_observation(self, x: np.ndarray) -> np.ndarray:
+        """Applies fitted standardization to an input observation."""
+        x_arr = np.asarray(x, dtype=np.float64)
+        if self.standardize and self.mean_ is not None and self.std_ is not None:
+            return (x_arr - self.mean_) / self.std_
+        return x_arr
+
     def fit(self, X_train: np.ndarray) -> "RegimeHMM":
         """
-        Fits 3-state Gaussian HMM on 2D series [standardized_SPY_returns, standardized_VIX].
-        Sorts states strictly by SPY return variance component Sigma_{k, rr}.
+        Fits 3-state Gaussian HMM on 2D series [SPY_returns, VIX].
+        Standardizes input with fold-scoped statistics, runs multi-restart EM,
+        and sorts states strictly by SPY return variance component Sigma_{k, rr}.
         """
         X = np.asarray(X_train, dtype=np.float64)
+        if self.standardize:
+            self.mean_ = np.mean(X, axis=0)
+            std = np.std(X, axis=0)
+            self.std_ = np.where(std < 1e-8, 1.0, std)
+            X_proc = (X - self.mean_) / self.std_
+        else:
+            self.mean_ = np.zeros(X.shape[1], dtype=np.float64)
+            self.std_ = np.ones(X.shape[1], dtype=np.float64)
+            X_proc = X
+
         try:
             from hmmlearn.hmm import GaussianHMM
 
-            raw_hmm = GaussianHMM(
-                n_components=self.NUM_STATES,
-                covariance_type="diag",
-                n_iter=self.n_iter,
-                tol=1e-3,
-                random_state=self.random_state,
-            )
-            raw_hmm.fit(X)
+            best_score = -np.inf
+            best_hmm = None
+
+            for i in range(max(1, self.n_fits)):
+                seed = self.random_state + i
+                raw_hmm = GaussianHMM(
+                    n_components=self.NUM_STATES,
+                    covariance_type="diag",
+                    n_iter=self.n_iter,
+                    tol=1e-3,
+                    random_state=seed,
+                )
+                try:
+                    raw_hmm.fit(X_proc)
+                    score = raw_hmm.score(X_proc)
+                    if score > best_score or best_hmm is None:
+                        best_score = score
+                        best_hmm = raw_hmm
+                except Exception:
+                    continue
+
+            if best_hmm is None:
+                raise RuntimeError("Failed to fit GaussianHMM on any restart.")
+
+            raw_hmm = best_hmm
 
             # Extract 1D variance component for SPY return (feature index 0)
             if raw_hmm.covars_.ndim == 3:
@@ -92,6 +137,9 @@ class RegimeHMM:
         log_alpha_tilde(k) = log P(x_t | S_t = k) + logsumexp_j (log_alpha_prev(j) + log A_{j, k})
         p_t(k) = exp(log_alpha_tilde(k) - logsumexp_j log_alpha_tilde(j))
         """
+        if self.means_ is None or self.covars_ is None or self.transmat_ is None:
+            raise RuntimeError("GaussianHMM must be fit before filtering.")
+
         log_emission = np.zeros(self.NUM_STATES)
         for k in range(self.NUM_STATES):
             # Extract diagonal variance components
@@ -116,12 +164,19 @@ class RegimeHMM:
 
     def filter_sequence(self, X: np.ndarray) -> np.ndarray:
         """Causally forward-filters sequence X with zero lookahead leak."""
-        T = len(X)
+        if self.means_ is None or self.covars_ is None or self.transmat_ is None or self.startprob_ is None:
+            raise RuntimeError("GaussianHMM must be fit before filtering.")
+
+        X_arr = np.asarray(X, dtype=np.float64)
+        if self.standardize and self.mean_ is not None and self.std_ is not None:
+            X_arr = (X_arr - self.mean_) / self.std_
+
+        T = len(X_arr)
         probs = np.zeros((T, self.NUM_STATES))
         log_alpha = np.log(np.maximum(self.startprob_, 1e-12))
 
         for t in range(T):
-            prob_t, log_alpha = self.forward_filter_step(X[t], log_alpha)
+            prob_t, log_alpha = self.forward_filter_step(X_arr[t], log_alpha)
             probs[t] = prob_t
 
         return probs

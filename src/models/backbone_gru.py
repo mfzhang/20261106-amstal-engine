@@ -48,7 +48,10 @@ class AttentionGRUBackbone:
             import torch.nn as nn
 
             torch.manual_seed(self.random_state)
-            torch.set_num_threads(self.num_threads)
+            try:
+                torch.set_num_threads(self.num_threads)
+            except RuntimeError:
+                pass
 
             class GRUSelfAttentionNet(nn.Module):
                 def __init__(self, in_d: int, h_d: int, n_heads: int, n_cls: int):

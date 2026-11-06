@@ -49,14 +49,27 @@ class AmstalEngineDaemon:
         logger.info("Engine daemon fully active. Awaiting terminal connections...")
         await self._stop_event.wait()
 
-    def stop(self) -> None:
+    async def stop_async(self) -> None:
+        """Asynchronously and cleanly shuts down UDS server and WebSocket broadcaster."""
         logger.info("Initiating graceful teardown of Amstal Engine daemon...")
         if self._stop_event:
             self._stop_event.set()
         self.uds_server.stop()
         if self.ws_broadcaster:
-            asyncio.create_task(self.ws_broadcaster.stop())
+            await self.ws_broadcaster.stop()
         logger.info("Amstal Engine daemon teardown complete.")
+
+    def stop(self) -> None:
+        if self._stop_event:
+            self._stop_event.set()
+        self.uds_server.stop()
+        if self.ws_broadcaster:
+            try:
+                loop = asyncio.get_running_loop()
+                if loop.is_running():
+                    loop.create_task(self.ws_broadcaster.stop())
+            except RuntimeError:
+                pass
 
 
 async def _run_daemon() -> None:
@@ -74,7 +87,7 @@ async def _run_daemon() -> None:
     except asyncio.CancelledError:
         pass
     finally:
-        daemon.stop()
+        await daemon.stop_async()
 
 
 def main() -> int:

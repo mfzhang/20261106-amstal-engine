@@ -103,6 +103,8 @@ def test_label_series_full_lifecycle(rng) -> None:
     assert df_labels["exit_horizon"].max() <= 10
     assert np.all(df_labels["upper_barrier"] > 0)
     assert np.all(df_labels["lower_barrier"] < 0)
+    # Verification of zero same-day lookahead: t_end must be strictly after t_start
+    assert np.all(pd.to_datetime(df_labels["t_end"]) > pd.to_datetime(df_labels["t_start"]))
 
 
 def test_weight_labeled_df(rng) -> None:

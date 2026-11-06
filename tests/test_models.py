@@ -36,6 +36,15 @@ def test_lightgbm_backbone_fit_and_predict(rng) -> None:
     assert len(preds) == N
     assert set(preds).issubset({0, 1, 2})
 
+    # Test missing class in fold (e.g. only classes 0 and 1 present)
+    y_binary = rng.choice([0, 1], size=N, p=[0.5, 0.5])
+    model_binary = LightGBMBackbone(n_estimators=10, random_state=42)
+    model_binary.fit(X, y_binary)
+    probs_padded = model_binary.predict_proba(X)
+    assert probs_padded.shape == (N, 3)
+    assert np.all(probs_padded[:, 2] == 0.0)
+    assert np.allclose(probs_padded.sum(axis=1), 1.0, atol=1e-5)
+
 
 def test_lightgbm_temperature_scaling(rng) -> None:
     N = 300
@@ -112,8 +121,14 @@ def test_regime_hmm_causal_forward_filtering(rng) -> None:
     vix_std = rng.normal(0.0, 1.0, size=T)
     X = np.column_stack([spy_ret, vix_std])
 
-    hmm = RegimeHMM(random_state=42)
+    unfitted_hmm = RegimeHMM(random_state=42)
+    with pytest.raises(RuntimeError, match="must be fit before filtering"):
+        unfitted_hmm.filter_sequence(X)
+
+    hmm = RegimeHMM(random_state=42, standardize=True, n_fits=5)
     hmm.fit(X)
+    assert hmm.mean_ is not None
+    assert hmm.std_ is not None
 
     # States must be ordered by SPY return variance (feature 0): Sigma_0 <= Sigma_1 <= Sigma_2
     covars = hmm.covars_

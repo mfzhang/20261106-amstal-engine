@@ -56,6 +56,21 @@ class MicrostructureFeatureExtractor:
         # Precomputed slope regression weights for N=21: w_k = (k - 10) / 770
         k = np.arange(21, dtype=np.float64)
         self._slope_weights_21 = (k - 10.0) / 770.0
+        self._ewma_weights = {
+            s: self._compute_ewma_weights(s, self.lookback_window)
+            for s in (5, 21, 63, 126)
+        }
+
+    @staticmethod
+    def _compute_ewma_weights(span: int, t_len: int) -> np.ndarray:
+        alpha = 2.0 / (span + 1.0)
+        powers = (1.0 - alpha) ** np.arange(t_len - 1, -1, -1, dtype=np.float64)
+        return powers / np.sum(powers)
+
+    def _get_ewma_weights(self, span: int, t_len: int) -> np.ndarray:
+        if t_len == self.lookback_window and span in self._ewma_weights:
+            return self._ewma_weights[span]
+        return self._compute_ewma_weights(span, t_len)
 
     @staticmethod
     def rank_normalize(values: np.ndarray) -> np.ndarray:
@@ -332,28 +347,50 @@ class MicrostructureFeatureExtractor:
         6. Monthly Volatility (21-day rolling standard deviation)
         7. Monthly Trend Velocity (21-day linear regression slope)
         
-        Also accepts 3D tensor (Batch, 126, 15) returning (Batch, 105).
+        Also accepts 3D tensor (Batch, 126, 15) returning (Batch, 105) vectorized via NumPy dot products.
         """
         seq = np.asarray(sequence_15, dtype=np.float64)
         if seq.ndim == 3:
-            return np.array([self.extract_summary_105(item) for item in seq], dtype=np.float64)
+            b_len, t_len, n_ch = seq.shape
+            if n_ch != self.NUM_CHANNELS:
+                raise ValueError(f"Expected channel dimension {self.NUM_CHANNELS}, got {n_ch}")
+
+            curr_vals = seq[:, -1, :]  # (Batch, 15)
+            w5 = self._get_ewma_weights(5, t_len)
+            ewma5 = np.tensordot(seq, w5, axes=([1], [0]))  # (Batch, 15)
+            w21 = self._get_ewma_weights(21, t_len)
+            ewma21 = np.tensordot(seq, w21, axes=([1], [0]))
+            w63 = self._get_ewma_weights(63, t_len)
+            ewma63 = np.tensordot(seq, w63, axes=([1], [0]))
+            w126 = self._get_ewma_weights(126, t_len)
+            ewma126 = np.tensordot(seq, w126, axes=([1], [0]))
+
+            if t_len >= 21:
+                std21 = np.std(seq[:, -21:, :], axis=1, ddof=1)
+                std21 = np.nan_to_num(std21, nan=0.0)
+                slope21 = np.tensordot(seq[:, -21:, :], self._slope_weights_21, axes=([1], [0]))
+            else:
+                std21 = np.zeros((b_len, n_ch), dtype=np.float64)
+                slope21 = np.zeros((b_len, n_ch), dtype=np.float64)
+
+            # Stack 7 statistics along last axis: (Batch, 15, 7) -> (Batch, 105)
+            stacked = np.stack([curr_vals, ewma5, ewma21, ewma63, ewma126, std21, slope21], axis=-1)
+            return stacked.reshape(b_len, self.NUM_SUMMARY_FEATURES)
 
         if seq.ndim != 2 or seq.shape[1] != self.NUM_CHANNELS:
             raise ValueError(f"Expected sequence of shape (T, 15), got {seq.shape}")
 
         t_len, n_ch = seq.shape
-        df = pd.DataFrame(seq)
-
         curr_vals = seq[-1, :]
-        ewma5 = df.ewm(span=5).mean().iloc[-1].values
-        ewma21 = df.ewm(span=21).mean().iloc[-1].values
-        ewma63 = df.ewm(span=63).mean().iloc[-1].values
-        ewma126 = df.ewm(span=126).mean().iloc[-1].values
+        ewma5 = np.dot(self._get_ewma_weights(5, t_len), seq)
+        ewma21 = np.dot(self._get_ewma_weights(21, t_len), seq)
+        ewma63 = np.dot(self._get_ewma_weights(63, t_len), seq)
+        ewma126 = np.dot(self._get_ewma_weights(126, t_len), seq)
 
         if t_len >= 21:
-            std21 = df.iloc[-21:].std(ddof=1).fillna(0.0).values
-            # Fast vectorized dot product: slope = sum(w * y)
-            slope21 = np.sum(df.iloc[-21:].values * self._slope_weights_21[:, None], axis=0)
+            std21 = np.std(seq[-21:, :], axis=0, ddof=1)
+            std21 = np.nan_to_num(std21, nan=0.0)
+            slope21 = np.dot(self._slope_weights_21, seq[-21:, :])
         else:
             std21 = np.zeros(n_ch, dtype=np.float64)
             slope21 = np.zeros(n_ch, dtype=np.float64)
