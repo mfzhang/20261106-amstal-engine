@@ -95,6 +95,8 @@ class JsonRpcUdsServer:
         edgar_provider: Optional[Callable[[str], Dict[str, Any]]] = None,
         news_provider: Optional[Callable[[str], List[Dict[str, Any]]]] = None,
         historical_prices_provider: Optional[Callable[[str, int], List[Dict[str, Any]]]] = None,
+        analyst_ratings_provider: Optional[Callable[[str], Dict[str, Any]]] = None,
+        copilot_query_provider: Optional[Callable[[str, Optional[str]], Dict[str, Any]]] = None,
     ) -> None:
         self.socket_path = socket_path
         self.signal_provider = signal_provider
@@ -105,6 +107,8 @@ class JsonRpcUdsServer:
         self.edgar_provider = edgar_provider
         self.news_provider = news_provider
         self.historical_prices_provider = historical_prices_provider
+        self.analyst_ratings_provider = analyst_ratings_provider
+        self.copilot_query_provider = copilot_query_provider
         self.server: Optional[asyncio.AbstractServer] = None
         self.is_running: bool = False
 
@@ -401,6 +405,212 @@ class JsonRpcUdsServer:
             return json.dumps({
                 "jsonrpc": "2.0",
                 "result": prices_data,
+                "id": req_id,
+            })
+
+        elif method == "get_analyst_ratings":
+            ticker = params.get("ticker", "SPY").upper()
+            if self.analyst_ratings_provider:
+                ratings_data = self.analyst_ratings_provider(ticker)
+            else:
+                current_p = 138.25 if ticker == "NVDA" else 150.00
+                mean_t = 155.00 if ticker == "NVDA" else 165.00
+                median_t = 150.00 if ticker == "NVDA" else 162.00
+                high_t = 175.00 if ticker == "NVDA" else 185.00
+                low_t = 120.00 if ticker == "NVDA" else 130.00
+                upside = round(((mean_t - current_p) / current_p) * 100.0, 2)
+                ratings_data = {
+                    "ticker": ticker,
+                    "consensus_price_target": {
+                        "mean": mean_t,
+                        "median": median_t,
+                        "high": high_t,
+                        "low": low_t,
+                        "current_price": current_p,
+                        "upside_pct": upside,
+                    },
+                    "recommendation_distribution": {
+                        "strong_buy": 28,
+                        "buy": 15,
+                        "hold": 4,
+                        "underperform": 1,
+                        "sell": 0,
+                        "total_analysts": 48,
+                        "consensus_score": 4.46,
+                        "consensus_rating": "BUY",
+                    },
+                    "historical_revisions": [
+                        {"period": "Current", "mean_target": mean_t, "buy_pct": 89.6},
+                        {"period": "1M Ago", "mean_target": round(mean_t - 5.0, 2), "buy_pct": 87.5},
+                        {"period": "2M Ago", "mean_target": round(mean_t - 12.5, 2), "buy_pct": 85.0},
+                        {"period": "3M Ago", "mean_target": round(mean_t - 20.0, 2), "buy_pct": 82.5},
+                    ],
+                    # Convenience top-level mappings
+                    "mean": mean_t,
+                    "median": median_t,
+                    "high": high_t,
+                    "low": low_t,
+                    "current_price": current_p,
+                    "upside_pct": upside,
+                    "strong_buy": 28,
+                    "buy": 15,
+                    "hold": 4,
+                    "underperform": 1,
+                    "sell": 0,
+                    "total_analysts": 48,
+                    "consensus_score": 4.46,
+                    "consensus_rating": "BUY",
+                }
+            return json.dumps({
+                "jsonrpc": "2.0",
+                "result": ratings_data,
+                "id": req_id,
+            })
+
+        elif method == "copilot_query":
+            query = params.get("query", "")
+            raw_ticker = params.get("ticker")
+            ticker = raw_ticker.upper() if raw_ticker and isinstance(raw_ticker, str) else None
+            eff_ticker = ticker or "SPY"
+
+            if self.copilot_query_provider:
+                copilot_data = self.copilot_query_provider(query, ticker)
+            else:
+                q_lower = query.lower()
+                # 1. Kelly / Allocation / Sizing / Conviction
+                if any(k in q_lower for k in ("kelly", "size", "sizing", "allocation", "conviction")):
+                    tool_routed = "kelly_sizer"
+                    if self.signal_provider:
+                        sig = self.signal_provider(eff_ticker)
+                    else:
+                        sig = {
+                            "ticker": eff_ticker,
+                            "action": "BUY",
+                            "conviction_tier": "HIGH",
+                            "unconstrained_kelly_pct": 6.40,
+                            "l1_normalized_portfolio_allocation_pct": 6.40,
+                            "entry_price": 138.25 if eff_ticker == "NVDA" else 150.00,
+                            "dynamic_take_profit": 152.00 if eff_ticker == "NVDA" else 165.00,
+                            "dynamic_stop_loss": 131.30 if eff_ticker == "NVDA" else 142.50,
+                            "reward_to_risk_ratio": 2.0,
+                        }
+                    action = sig.get("action", "HOLD")
+                    conviction = sig.get("conviction_tier", "MEDIUM")
+                    kelly_pct = sig.get("unconstrained_kelly_pct", 0.0)
+                    alloc_pct = sig.get("l1_normalized_portfolio_allocation_pct", kelly_pct)
+                    tp = sig.get("dynamic_take_profit", 0.0)
+                    sl = sig.get("dynamic_stop_loss", 0.0)
+                    rr = sig.get("reward_to_risk_ratio", 2.0)
+                    resp_text = (
+                        f"QARE-MM v1.3 Sizing Recommendation for {eff_ticker}: "
+                        f"Action: {action} (Conviction: {conviction}). "
+                        f"Kelly Allocation: {alloc_pct:.2f}% (Unconstrained: {kelly_pct:.2f}%). "
+                        f"Dynamic ATR Take-Profit: ${tp:.2f}, Stop-Loss: ${sl:.2f} (Reward/Risk: {rr:.2f}:1). "
+                        f"Base-rate payoff centering active (Zero-skill prior maps strictly to 0.0% cash)."
+                    )
+                    routed_data = sig
+
+                # 2. Macro / Volatility / Regime / HMM
+                elif any(k in q_lower for k in ("regime", "volatility", "macro", "hmm")):
+                    tool_routed = "regime_hmm"
+                    if self.regime_provider:
+                        reg = self.regime_provider()
+                    else:
+                        reg = {
+                            "current_state": "LOW_VOLATILITY",
+                            "state_index": 0,
+                            "kappa": 0.50,
+                            "filtered_probabilities": {
+                                "low_volatility": 0.812,
+                                "medium_volatility": 0.145,
+                                "high_volatility": 0.043,
+                            },
+                        }
+                    state = reg.get("current_state", "LOW_VOLATILITY")
+                    kappa = reg.get("kappa", 0.50)
+                    state_idx = reg.get("state_index", 0)
+                    probs = reg.get("filtered_probabilities", {})
+                    p_low = probs.get("low_volatility", 0.0)
+                    p_med = probs.get("medium_volatility", 0.0)
+                    p_high = probs.get("high_volatility", 0.0)
+                    resp_text = (
+                        f"Macro Volatility Regime Analysis: Current State is {state} (State Index: {state_idx}, "
+                        f"Kelly Multiplier kappa: {kappa:.2f}). Forward-filtered regime probabilities: "
+                        f"Low Volatility: {p_low * 100:.1f}%, Medium Volatility: {p_med * 100:.1f}%, "
+                        f"High Volatility / Turbulent: {p_high * 100:.1f}%. Log-space forward recursion "
+                        f"strictly avoids backward Baum-Welch lookahead leaks."
+                    )
+                    routed_data = reg
+
+                # 3. SEC EDGAR / Form 4 / Insider / Cluster
+                elif any(k in q_lower for k in ("insider", "form 4", "cluster", "sec")):
+                    tool_routed = "sec_edgar"
+                    if self.edgar_provider:
+                        edg = self.edgar_provider(eff_ticker)
+                    else:
+                        edg = {
+                            "ticker": eff_ticker,
+                            "item1a_similarity": 0.88,
+                            "mda_similarity": 0.74,
+                            "item1a_sentiment_drift": -0.04,
+                            "mda_catalyst_score": 0.28,
+                            "form4_transactions": [{"shares": 120000, "is_10b5_1": True}],
+                        }
+                    item1a_sim = edg.get("item1a_similarity", 0.88)
+                    mda_cat = edg.get("mda_catalyst_score", 0.28)
+                    tx_count = len(edg.get("form4_transactions", []))
+                    resp_text = (
+                        f"SEC EDGAR Intelligence for {eff_ticker}: Item 1A Risk Factor cosine similarity is {item1a_sim:.2f}, "
+                        f"Item 7 MD&A catalyst score is {mda_cat:.2f}. Identified {tx_count} Form 4 insider transactions "
+                        f"(10b5-1 plans discounted per PRD Section 4.3). All filings strictly governed by the post-16:00 ET "
+                        f"Point-in-Time acceptance invariant."
+                    )
+                    routed_data = edg
+
+                # 4. Peer GAT / Competitor / Supply Chain / SPLC
+                elif any(k in q_lower for k in ("peer", "competitor", "supply chain", "splc")):
+                    tool_routed = "peer_gat"
+                    if self.peer_graph_provider:
+                        pg = self.peer_graph_provider(eff_ticker)
+                    else:
+                        pg = {
+                            "target_ticker": eff_ticker,
+                            "nodes": [{"id": eff_ticker}, {"id": "AMD"}, {"id": "TSM"}],
+                            "edges": [{"source": eff_ticker, "target": "AMD", "attention_weight": 0.165}],
+                        }
+                    nodes_cnt = len(pg.get("nodes", []))
+                    edges_cnt = len(pg.get("edges", []))
+                    resp_text = (
+                        f"Dynamic Peer GAT Topology for {eff_ticker}: Subgraph contains {nodes_cnt} nodes and {edges_cnt} directed edges. "
+                        f"Attention-weighted messages capture cross-sectional lead-lag momentum spillover from sector peers and upstream "
+                        f"supply chain nodes net of sector ETF absorption."
+                    )
+                    routed_data = pg
+
+                # 5. Default General Quant Insight
+                else:
+                    tool_routed = "general_quant"
+                    routed_data = {"ticker": eff_ticker, "query": query}
+                    resp_text = (
+                        f"Amstal Institutional Quantitative Copilot: Invariant-enforced alpha & risk engine "
+                        f"operating strictly under zero-lookahead point-in-time constraints. All microstructure features "
+                        f"utilize causal warm-up burn-in and SEC filings adhere to post-16:00 ET cutoff rules. "
+                        f"Query with keywords like 'kelly sizing', 'macro regime', 'insider filings', or 'peer graph' "
+                        f"for specialized multi-modal analytics."
+                    )
+
+                copilot_data = {
+                    "query": query,
+                    "ticker": eff_ticker,
+                    "tool_routed": tool_routed,
+                    "response": resp_text,
+                    "content": resp_text,
+                    "data": routed_data,
+                }
+
+            return json.dumps({
+                "jsonrpc": "2.0",
+                "result": copilot_data,
                 "id": req_id,
             })
 

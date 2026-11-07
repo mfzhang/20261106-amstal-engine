@@ -351,4 +351,141 @@ def test_websocket_jsonrpc_dispatch() -> None:
     asyncio.run(_run_test())
 
 
+def test_jsonrpc_uds_server_analyst_ratings_and_copilot_query() -> None:
+    # 1. Default providers
+    server = JsonRpcUdsServer(socket_path="/tmp/test_amstal.sock")
+
+    # A. get_analyst_ratings (default)
+    anr_req = json.dumps({
+        "jsonrpc": "2.0",
+        "method": "get_analyst_ratings",
+        "params": {"ticker": "NVDA"},
+        "id": "anr-1",
+    })
+    anr_resp = json.loads(server.process_message(anr_req))
+    assert anr_resp["jsonrpc"] == "2.0"
+    assert anr_resp["id"] == "anr-1"
+    anr_res = anr_resp["result"]
+
+    # Consensus price target
+    assert "consensus_price_target" in anr_res
+    cpt = anr_res["consensus_price_target"]
+    assert cpt["mean"] > 0
+    assert cpt["high"] >= cpt["mean"] >= cpt["low"]
+    assert cpt["current_price"] > 0
+    assert "upside_pct" in cpt
+
+    # Recommendation distribution breakdown
+    assert "recommendation_distribution" in anr_res
+    rd = anr_res["recommendation_distribution"]
+    assert rd["total_analysts"] == (
+        rd["strong_buy"] + rd["buy"] + rd["hold"] + rd["underperform"] + rd["sell"]
+    )
+    assert 1.0 <= rd["consensus_score"] <= 5.0
+    assert rd["consensus_rating"] in ("BUY", "STRONG_BUY", "HOLD", "SELL")
+
+    # Historical revisions
+    assert "historical_revisions" in anr_res
+    revs = anr_res["historical_revisions"]
+    assert len(revs) == 4
+    assert [r["period"] for r in revs] == ["Current", "1M Ago", "2M Ago", "3M Ago"]
+    assert all("mean_target" in r and "buy_pct" in r for r in revs)
+
+    # Direct top-level accessors
+    assert anr_res["mean"] == cpt["mean"]
+    assert anr_res["consensus_score"] == rd["consensus_score"]
+
+    # B. copilot_query - Deterministic Tool Routing
+    # Case 1: Kelly / Sizing / Allocation
+    cq_kelly = json.loads(server.process_message(json.dumps({
+        "jsonrpc": "2.0",
+        "method": "copilot_query",
+        "params": {"query": "What is the optimal Kelly sizing and conviction for NVDA?", "ticker": "NVDA"},
+        "id": "cq-1",
+    })))
+    assert cq_kelly["result"]["tool_routed"] == "kelly_sizer"
+    assert "Kelly" in cq_kelly["result"]["response"]
+    assert "Take-Profit" in cq_kelly["result"]["response"]
+
+    # Case 2: Regime / Volatility / HMM
+    cq_regime = json.loads(server.process_message(json.dumps({
+        "jsonrpc": "2.0",
+        "method": "copilot_query",
+        "params": {"query": "Show macro volatility regime and HMM probabilities"},
+        "id": "cq-2",
+    })))
+    assert cq_regime["result"]["tool_routed"] == "regime_hmm"
+    assert "Macro Volatility Regime" in cq_regime["result"]["response"]
+    assert "probabilities" in cq_regime["result"]["response"]
+
+    # Case 3: SEC / Insider / Form 4
+    cq_edgar = json.loads(server.process_message(json.dumps({
+        "jsonrpc": "2.0",
+        "method": "copilot_query",
+        "params": {"query": "Any SEC Form 4 insider cluster transactions?", "ticker": "NVDA"},
+        "id": "cq-3",
+    })))
+    assert cq_edgar["result"]["tool_routed"] == "sec_edgar"
+    assert "Item 1A" in cq_edgar["result"]["response"]
+    assert "Form 4" in cq_edgar["result"]["response"]
+
+    # Case 4: Peer / Competitor / SPLC
+    cq_peer = json.loads(server.process_message(json.dumps({
+        "jsonrpc": "2.0",
+        "method": "copilot_query",
+        "params": {"query": "Analyze competitor peer graph and supply chain spillover", "ticker": "NVDA"},
+        "id": "cq-4",
+    })))
+    assert cq_peer["result"]["tool_routed"] == "peer_gat"
+    assert "Peer GAT" in cq_peer["result"]["response"]
+    assert "edges" in cq_peer["result"]["response"]
+
+    # Case 5: Default General Quant
+    cq_default = json.loads(server.process_message(json.dumps({
+        "jsonrpc": "2.0",
+        "method": "copilot_query",
+        "params": {"query": "Tell me about model methodology"},
+        "id": "cq-5",
+    })))
+    assert cq_default["result"]["tool_routed"] == "general_quant"
+    assert "zero-lookahead" in cq_default["result"]["response"]
+
+    # 2. Custom Providers Verification
+    custom_server = JsonRpcUdsServer(
+        socket_path="/tmp/test_custom_amstal.sock",
+        analyst_ratings_provider=lambda t: {
+            "ticker": t,
+            "mean": 200.0,
+            "consensus_rating": "STRONG_BUY",
+            "custom": True,
+        },
+        copilot_query_provider=lambda q, t: {
+            "query": q,
+            "ticker": t,
+            "tool_routed": "custom_llm",
+            "response": f"Custom copilot answer for {t}: {q}",
+            "custom": True,
+        },
+    )
+
+    custom_anr = json.loads(custom_server.process_message(json.dumps({
+        "jsonrpc": "2.0",
+        "method": "get_analyst_ratings",
+        "params": {"ticker": "CRWD"},
+        "id": "c-anr",
+    })))
+    assert custom_anr["result"]["custom"] is True
+    assert custom_anr["result"]["mean"] == 200.0
+
+    custom_cq = json.loads(custom_server.process_message(json.dumps({
+        "jsonrpc": "2.0",
+        "method": "copilot_query",
+        "params": {"query": "custom prompt", "ticker": "CRWD"},
+        "id": "c-cq",
+    })))
+    assert custom_cq["result"]["custom"] is True
+    assert custom_cq["result"]["tool_routed"] == "custom_llm"
+
+
+
 
