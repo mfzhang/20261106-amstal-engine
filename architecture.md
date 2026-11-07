@@ -106,12 +106,13 @@ The terminal and engine communicate locally without relying on external cloud in
 +──────────────────────────┬─────────────────────────────┬─────────────────────────────────────────+
 | Channel Name             | Wire / Storage Transport    | Message Format / Concurrency Rule       |
 +──────────────────────────┼─────────────────────────────┼─────────────────────────────────────────+
-| **Control & RPC**        | Unix Domain Socket (UDS)    | Binary Framed JSON-RPC 2.0              |
-|                          | Path: `/tmp/amstal.sock`    | (Request / Synchronous Response, Ping)  |
+| **Control & RPC**        | Local Domain Socket / Pipe  | Binary Framed JSON-RPC 2.0 (Ping <1ms)  |
+|                          | Unix: `$XDG_RUNTIME_DIR/`   | Mode 0700 private user boundary.        |
+|                          | Windows: `\\.\pipe\amstal`  | Windows Named Pipe security descriptor. |
 +──────────────────────────┼─────────────────────────────┼─────────────────────────────────────────+
 | **Market Data Feed**     | Local WebSocket             | Multiplexed UTF-8 JSON                  |
-|                          | URL: `ws://127.0.0.1:8194`  | (100ms Conflated Pub/Sub: `ticker`,     |
-|                          |                             | `regime`, `signals`, `alerts`)          |
+|                          | URL: `ws://127.0.0.1:8194`  | (100ms Conflated Pub/Sub with Origin    |
+|                          | Token Authenticated         | check & ephemeral session token)        |
 +──────────────────────────┼─────────────────────────────┼─────────────────────────────────────────+
 | **Lock-Free Analytical** | Stateless `:memory:`        | Zero-Lock Direct Parquet Queries        |
 | **Storage Bridge**       | `duckdb-rs` & Python DuckDB | Python writes `.parquet.tmp` -> POSIX   |
@@ -372,8 +373,9 @@ Every walk-forward fold strictly enforces two 10-trading-day purge buffers ($t_{
 
 ### 5.4 Configurable Execution Mode & Portfolio-Level $L_1$ Kelly Normalization (`kelly_engine.py`)
 1. **Single-Stock Fractional Kelly**:
-   Solves the expected log-wealth objective using centered validation payoffs ($\tilde{b}_k = R_k - \mu_{\bar{p}}$, guaranteeing $\sum \bar{p}_k \tilde{b}_k = 0$) net of 15 bps round-trip friction ($c = 0.0015$), scaled by regime multiplier $\kappa \in [0.25, 0.50]$ and capped at $f_{\max} = 0.10$:
+   Solves the expected log-wealth objective using centered validation payoffs ($\tilde{b}_k = R_k - \mu_{\bar{p}}$, guaranteeing $\sum \bar{p}_k \tilde{b}_k = 0$) net of 15 bps round-trip friction ($c = 0.0015$), scaled by regime multiplier $\kappa \in [0.25, 0.50]$ and capped at $f_{\max} = 0.10$, subject to strict positive wealth multiplier domain bounds:
    $$\max_{f \in [0, f_{\max}]} \left[ \hat{p}_{\text{buy}} \ln(1 + f (\tilde{b}_{\text{upper}} - c)) + \hat{p}_{\text{sell}} \ln(1 - f (|\tilde{b}_{\text{lower}}| + c)) + \hat{p}_{\text{hold}} \ln(1 + f (\tilde{b}_{\text{vert}} - c)) \right]$$
+   $$\text{subject to } 1 + f(\tilde{b}_{\text{upper}} - c) > 0, \quad 1 - f(|\tilde{b}_{\text{lower}}| + c) > 0, \quad 1 + f(\tilde{b}_{\text{vert}} - c) > 0$$
 2. **Execution Mode Switch**:
    * `LONG_ONLY` (Default): Constrains $f_i \in [0, 0.10]$. `Underperform/Sell` signals exit long positions to cash ($0.0\%$).
    * `LONG_SHORT` (Diagnostic Stat-Arb): Evaluates cross-sectional Rank IC and dollar-neutral long/short performance in `metrics.py`.
