@@ -9,6 +9,7 @@ import signal
 import sys
 from typing import Optional
 
+from src.ipc.live_providers import LiveInferenceProvider
 from src.ipc.uds_server import JsonRpcUdsServer
 from src.ipc.ws_broadcaster import WebSocketBroadcaster
 
@@ -28,7 +29,20 @@ class AmstalEngineDaemon:
         ws_host: str = "127.0.0.1",
         ws_port: int = 8194,
     ) -> None:
-        self.uds_server = JsonRpcUdsServer(socket_path=socket_path)
+        self.live_provider = LiveInferenceProvider()
+        if self.live_provider.is_ready():
+            logger.info("Initializing JsonRpcUdsServer with live trained model providers.")
+            self.uds_server = JsonRpcUdsServer(
+                socket_path=socket_path,
+                signal_provider=self.live_provider.get_signal,
+                regime_provider=self.live_provider.get_macro_regime,
+                security_master_provider=self.live_provider.get_security_master,
+                historical_prices_provider=self.live_provider.get_historical_prices,
+            )
+        else:
+            logger.warning("No production weights found. Initializing JsonRpcUdsServer in reference stub mode.")
+            self.uds_server = JsonRpcUdsServer(socket_path=socket_path)
+
         self.ws_broadcaster = WebSocketBroadcaster(
             host=ws_host,
             port=ws_port,

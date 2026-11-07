@@ -49,6 +49,8 @@ Cargo.lock
 
 # Financial Data & Parquet Storage (Strictly Git-Ignored)
 /data/
+/lakehouse/
+/weights/
 *.parquet
 *.parquet.tmp
 *.duckdb
