@@ -12,12 +12,20 @@ import logging
 import os
 from pathlib import Path
 import pickle
+import resource
 import sys
 import time
 from typing import Any, Dict, List, Optional, Tuple
 import warnings
 warnings.filterwarnings("ignore", category=FutureWarning)
 warnings.filterwarnings("ignore", category=DeprecationWarning)
+
+# Increase open file descriptor limits on macOS
+try:
+    soft, hard = resource.getrlimit(resource.RLIMIT_NOFILE)
+    resource.setrlimit(resource.RLIMIT_NOFILE, (min(4096, hard), hard))
+except Exception:
+    pass
 
 import numpy as np
 import pandas as pd
@@ -77,18 +85,51 @@ class ProductionTrainer:
         (self.lakehouse_dir / "processed" / "daily").mkdir(parents=True, exist_ok=True)
         (self.lakehouse_dir / "processed" / "hourly").mkdir(parents=True, exist_ok=True)
 
-    def hydrate_universe(self, target_tickers: Optional[List[str]] = None) -> List[str]:
+    def _save_or_fallback(self, ticker: str, df: Optional[pd.DataFrame]) -> Optional[str]:
+        """Validates and saves DataFrame; falls back to synthetic data if invalid."""
+        try:
+            if df is not None and not df.empty:
+                df_clean = df.copy()
+                df_clean.columns = [str(c).lower() for c in df_clean.columns]
+                df_clean = df_clean.dropna(subset=["open", "high", "low", "close"])
+                if "volume" in df_clean.columns:
+                    df_clean["volume"] = df_clean["volume"].fillna(0.0)
+                if "vwap" not in df_clean.columns:
+                    df_clean["vwap"] = (df_clean["high"] + df_clean["low"] + df_clean["close"]) / 3.0
+                df_clean.index.name = "timestamp"
+
+                if len(df_clean) >= 126:
+                    self.market_loader.validate_market_data(df_clean)
+                    self.market_loader.save_ticker_daily(ticker, df_clean)
+                    return ticker
+
+            # Fallback to deterministic synthetic path
+            seed = abs(hash(f"{ticker}_{self.random_seed}")) % (2**31)
+            df_synth = self.market_loader.generate_synthetic_daily(
+                ticker=ticker,
+                start_date=self.start_date,
+                end_date=self.end_date,
+                base_price=100.0 + (seed % 200),
+                drift=0.0003 + ((seed % 10) * 0.0001),
+                vol=0.012 + ((seed % 15) * 0.001),
+                seed=seed,
+            )
+            self.market_loader.save_ticker_daily(ticker, df_synth)
+            return ticker
+        except Exception as e:
+            logger.warning(f"Error saving {ticker}: {e}")
+            return None
+
+    def hydrate_universe(self, target_tickers: Optional[List[str]] = None, overwrite: bool = False) -> List[str]:
         """
         Hydrates local Parquet lakehouse for SPY, 9 Sector ETFs, and active target equities.
         Sanitizes headers, handles MultiIndex columns, and validates OHLCV invariants.
         """
-        logger.info(f"Hydrating Lakehouse (mode: {self.mode}) from {self.start_date} to {self.end_date}...")
+        logger.info(f"Hydrating Lakehouse (mode: {self.mode}) from {self.start_date} to {self.end_date} (overwrite={overwrite})...")
 
-        # Universal benchmark and sector ETFs
         benchmarks = ["SPY"]
         sector_etfs = sorted(list(self.universe_selector.SECTOR_ETF_MAP.values()))
 
-        # Universe equities
         if target_tickers is None:
             active_equities = [
                 rec.ticker
@@ -103,72 +144,69 @@ class ProductionTrainer:
 
         successful_tickers: List[str] = []
 
-        for i, ticker in enumerate(all_tickers, 1):
-            try:
-                # Check if already present and valid
-                df_existing = self.market_loader.load_ticker_daily(ticker, self.start_date, self.end_date)
-                if df_existing is not None and len(df_existing) >= 126:
-                    successful_tickers.append(ticker)
+        if self.mode == "live":
+            import yfinance as yf
+
+            # Chunk into batches of 25 symbols for reliable Yahoo Finance API throughput
+            chunk_size = 25
+            chunks = [all_tickers[i:i + chunk_size] for i in range(0, len(all_tickers), chunk_size)]
+
+            for chunk_idx, chunk in enumerate(chunks, 1):
+                tickers_to_fetch = []
+                for ticker in chunk:
+                    if not overwrite:
+                        df_ex = self.market_loader.load_ticker_daily(ticker, self.start_date, self.end_date)
+                        if df_ex is not None and len(df_ex) >= 126:
+                            successful_tickers.append(ticker)
+                            continue
+                    tickers_to_fetch.append(ticker)
+
+                if not tickers_to_fetch:
                     continue
 
-                df_data: Optional[pd.DataFrame] = None
-
-                if self.mode == "live":
-                    try:
-                        import yfinance as yf
-
-                        df_yf = yf.download(
-                            ticker,
-                            start=self.start_date,
-                            end=self.end_date,
-                            progress=False,
-                            auto_adjust=True,
-                            multi_level_index=False,
-                        )
-                        if df_yf is not None and not df_yf.empty:
-                            if isinstance(df_yf.columns, pd.MultiIndex):
-                                df_yf.columns = [
-                                    c[0].lower() if isinstance(c, tuple) else str(c).lower()
-                                    for c in df_yf.columns
-                                ]
-                            else:
-                                df_yf.columns = [str(c).lower() for c in df_yf.columns]
-
-                            df_yf = df_yf.dropna(subset=["open", "high", "low", "close"])
-                            if "volume" in df_yf.columns:
-                                df_yf["volume"] = df_yf["volume"].fillna(0.0)
-                            if "vwap" not in df_yf.columns:
-                                df_yf["vwap"] = (df_yf["high"] + df_yf["low"] + df_yf["close"]) / 3.0
-
-                            df_yf.index.name = "timestamp"
-                            if len(df_yf) >= 126:
-                                self.market_loader.validate_market_data(df_yf)
-                                df_data = df_yf
-                    except Exception as e:
-                        logger.debug(f"Live fetch for {ticker} fell back to synthetic: {e}")
-                        df_data = None
-
-                # Fallback to deterministic synthetic path if live failed or mode is synthetic
-                if df_data is None:
-                    seed = abs(hash(f"{ticker}_{self.random_seed}")) % (2**31)
-                    df_data = self.market_loader.generate_synthetic_daily(
-                        ticker=ticker,
-                        start_date=self.start_date,
-                        end_date=self.end_date,
-                        base_price=100.0 + (seed % 200),
-                        drift=0.0003 + ((seed % 10) * 0.0001),
-                        vol=0.012 + ((seed % 15) * 0.001),
-                        seed=seed,
+                try:
+                    df_bulk = yf.download(
+                        tickers_to_fetch,
+                        start=self.start_date,
+                        end=self.end_date,
+                        progress=False,
+                        auto_adjust=True,
+                        group_by="ticker",
                     )
+                except Exception as e:
+                    logger.warning(f"Bulk download failed for chunk {chunk_idx}: {e}")
+                    df_bulk = None
 
-                self.market_loader.save_ticker_daily(ticker, df_data)
-                successful_tickers.append(ticker)
+                for ticker in tickers_to_fetch:
+                    df_ticker: Optional[pd.DataFrame] = None
+                    if df_bulk is not None and not df_bulk.empty:
+                        try:
+                            if len(tickers_to_fetch) == 1:
+                                df_ticker = df_bulk
+                            elif ticker in df_bulk:
+                                df_ticker = df_bulk[ticker]
+                        except Exception:
+                            df_ticker = None
 
+                    saved = self._save_or_fallback(ticker, df_ticker)
+                    if saved:
+                        successful_tickers.append(saved)
+
+                logger.info(f"Hydrated {min(chunk_idx * chunk_size, len(all_tickers))}/{len(all_tickers)} symbols into lakehouse Parquet.")
+                time.sleep(0.15)
+        else:
+            for i, ticker in enumerate(all_tickers, 1):
+                if not overwrite:
+                    df_ex = self.market_loader.load_ticker_daily(ticker, self.start_date, self.end_date)
+                    if df_ex is not None and len(df_ex) >= 126:
+                        successful_tickers.append(ticker)
+                        continue
+
+                saved = self._save_or_fallback(ticker, None)
+                if saved:
+                    successful_tickers.append(saved)
                 if i % 50 == 0 or i == len(all_tickers):
                     logger.info(f"Hydrated {i}/{len(all_tickers)} symbols into lakehouse Parquet.")
-
-            except Exception as e:
-                logger.warning(f"Skipping {ticker} due to hydration error: {e}")
 
         logger.info(f"Lakehouse hydration complete: {len(successful_tickers)} valid symbols stored.")
         return successful_tickers
@@ -390,6 +428,7 @@ def main() -> int:
     parser.add_argument("--start-date", default="2020-01-01", help="Start date (YYYY-MM-DD)")
     parser.add_argument("--end-date", default="2024-12-31", help="End date (YYYY-MM-DD)")
     parser.add_argument("--tickers", default="", help="Optional comma-separated list of tickers")
+    parser.add_argument("--overwrite", action="store_true", help="Force re-download and overwrite existing data")
     args = parser.parse_args()
 
     custom_tickers = [t.strip().upper() for t in args.tickers.split(",") if t.strip()] if args.tickers else None
@@ -402,7 +441,7 @@ def main() -> int:
         mode=args.mode,
     )
 
-    hydrated_tickers = trainer.hydrate_universe(target_tickers=custom_tickers)
+    hydrated_tickers = trainer.hydrate_universe(target_tickers=custom_tickers, overwrite=args.overwrite)
     manifest = trainer.train_all(hydrated_tickers)
 
     print("\n" + "=" * 80)
