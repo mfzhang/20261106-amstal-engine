@@ -28,6 +28,8 @@ def build_qare_signal_frame(
     regime_state: str = "LOW_VOLATILITY",
     regime_index: int = 0,
     regime_probs: Optional[Dict[str, float]] = None,
+    regime_kappa: Optional[float] = None,
+    transition_matrix: Optional[List[List[float]]] = None,
     signal_breakdown: Optional[Dict[str, float]] = None,
     winning_engine: str = "LIGHTGBM_105",
     execution_mode: str = "LONG_ONLY",
@@ -44,6 +46,19 @@ def build_qare_signal_frame(
         "medium_volatility": 0.145,
         "high_volatility": 0.043,
     }
+    eff_probs = regime_probs or default_regime_probs
+    p_med = float(eff_probs.get("medium_volatility", 0.145))
+    p_high = float(eff_probs.get("high_volatility", 0.043))
+    eff_kappa = (
+        round(float(regime_kappa), 2)
+        if regime_kappa is not None
+        else round(0.85 * (1.0 - 0.80 * p_high) * (1.0 - 0.20 * p_med), 2)
+    )
+    eff_transmat = transition_matrix or [
+        [0.898, 0.096, 0.006],
+        [0.185, 0.766, 0.049],
+        [0.012, 0.321, 0.667],
+    ]
     default_signals = {
         "residual_momentum_20d_rank": 0.78,
         "overnight_return_rank": 0.42,
@@ -76,7 +91,9 @@ def build_qare_signal_frame(
         "macro_regime": {
             "current_state": regime_state,
             "state_index": regime_index,
-            "filtered_probabilities": regime_probs or default_regime_probs,
+            "kappa": eff_kappa,
+            "filtered_probabilities": eff_probs,
+            "transition_matrix": eff_transmat,
         },
         "signal_breakdown": signal_breakdown or default_signals,
         "calibration": {

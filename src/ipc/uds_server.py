@@ -201,7 +201,17 @@ class JsonRpcUdsServer:
                 regime_data = {
                     "current_state": "LOW_VOLATILITY",
                     "state_index": 0,
-                    "kappa": 0.50,
+                    "kappa": 0.80,
+                    "filtered_probabilities": {
+                        "low_volatility": 0.812,
+                        "medium_volatility": 0.145,
+                        "high_volatility": 0.043,
+                    },
+                    "transition_matrix": [
+                        [0.898, 0.096, 0.006],
+                        [0.185, 0.766, 0.049],
+                        [0.012, 0.321, 0.667],
+                    ],
                 }
             return json.dumps({
                 "jsonrpc": "2.0",
@@ -226,7 +236,15 @@ class JsonRpcUdsServer:
                     "beta_sector_60d": 1.08,
                     "adv_30d_shares": 45000000,
                     "market_cap_billions": 3250.5,
+                    "pe_ratio_ltm": 52.4,
+                    "pe_forward": 34.8,
+                    "dividend_yield_pct": 0.03,
+                    "high_52w": 149.76,
+                    "low_52w": 75.60,
                     "business_summary": f"{ticker} designs high-performance accelerated computing platforms for enterprise AI workloads.",
+                    "headquarters": "Santa Clara, CA",
+                    "ceo": "Jensen Huang",
+                    "employees": 29600,
                 }
             return json.dumps({
                 "jsonrpc": "2.0",
@@ -242,28 +260,30 @@ class JsonRpcUdsServer:
                 graph_data = {
                     "target_ticker": ticker,
                     "nodes": [
-                        {"id": ticker, "role": "TARGET", "role_code": 0.0, "label": ticker},
-                        {"id": "AMD", "role": "GICS_PEER", "role_code": 0.33, "label": "AMD"},
-                        {"id": "AVGO", "role": "GICS_PEER", "role_code": 0.33, "label": "AVGO"},
-                        {"id": "QCOM", "role": "GICS_PEER", "role_code": 0.33, "label": "QCOM"},
-                        {"id": "INTC", "role": "GICS_PEER", "role_code": 0.33, "label": "INTC"},
-                        {"id": "TSM", "role": "LEAD_LAG", "role_code": 0.66, "label": "TSM", "cross_corr_5d": 0.68},
-                        {"id": "ASML", "role": "LEAD_LAG", "role_code": 0.66, "label": "ASML", "cross_corr_5d": 0.61},
-                        {"id": "MSFT", "role": "LEAD_LAG", "role_code": 0.66, "label": "MSFT", "cross_corr_5d": 0.54},
-                        {"id": "AMZN", "role": "LEAD_LAG", "role_code": 0.66, "label": "AMZN", "cross_corr_5d": 0.51},
-                        {"id": "XLK", "role": "SECTOR_ETF", "role_code": 1.0, "label": "XLK"},
+                        {"id": ticker, "role": "TARGET", "role_code": 0.0, "label": ticker, "return_5d": 3.42, "spillover_contribution": 0.0},
+                        {"id": "AMD", "role": "GICS_PEER", "role_code": 0.33, "label": "AMD", "return_5d": 2.15, "spillover_contribution": 0.14},
+                        {"id": "AVGO", "role": "GICS_PEER", "role_code": 0.33, "label": "AVGO", "return_5d": 1.88, "spillover_contribution": 0.12},
+                        {"id": "QCOM", "role": "GICS_PEER", "role_code": 0.33, "label": "QCOM", "return_5d": -0.45, "spillover_contribution": -0.03},
+                        {"id": "INTC", "role": "GICS_PEER", "role_code": 0.33, "label": "INTC", "return_5d": -1.20, "spillover_contribution": -0.05},
+                        {"id": "TSM", "role": "LEAD_LAG", "role_code": 0.66, "label": "TSM", "cross_corr_5d": 0.68, "return_5d": 4.10, "spillover_contribution": 0.22},
+                        {"id": "ASML", "role": "LEAD_LAG", "role_code": 0.66, "label": "ASML", "cross_corr_5d": 0.61, "return_5d": 1.65, "spillover_contribution": 0.09},
+                        {"id": "MSFT", "role": "LEAD_LAG", "role_code": 0.66, "label": "MSFT", "cross_corr_5d": 0.54, "return_5d": 1.12, "spillover_contribution": 0.07},
+                        {"id": "AMZN", "role": "LEAD_LAG", "role_code": 0.66, "label": "AMZN", "cross_corr_5d": 0.51, "return_5d": 0.95, "spillover_contribution": 0.05},
+                        {"id": "XLK", "role": "SECTOR_ETF", "role_code": 1.0, "label": "XLK", "return_5d": 1.54, "spillover_contribution": -0.12},
                     ],
                     "edges": [
-                        {"source": ticker, "target": "AMD", "attention_weight": 0.165},
-                        {"source": ticker, "target": "AVGO", "attention_weight": 0.142},
-                        {"source": ticker, "target": "QCOM", "attention_weight": 0.118},
-                        {"source": ticker, "target": "INTC", "attention_weight": 0.085},
-                        {"source": "TSM", "target": ticker, "attention_weight": 0.185, "lead_days": 5},
-                        {"source": "ASML", "target": ticker, "attention_weight": 0.134, "lead_days": 5},
-                        {"source": "MSFT", "target": ticker, "attention_weight": 0.098, "lead_days": 5},
-                        {"source": "AMZN", "target": ticker, "attention_weight": 0.073, "lead_days": 5},
-                        {"source": "XLK", "target": ticker, "attention_weight": 0.220},
+                        {"source": ticker, "target": "AMD", "attention_weight": 0.135},
+                        {"source": ticker, "target": "AVGO", "attention_weight": 0.116},
+                        {"source": ticker, "target": "QCOM", "attention_weight": 0.097},
+                        {"source": ticker, "target": "INTC", "attention_weight": 0.070},
+                        {"source": "TSM", "target": ticker, "attention_weight": 0.152, "lead_days": 5},
+                        {"source": "ASML", "target": ticker, "attention_weight": 0.110, "lead_days": 5},
+                        {"source": "MSFT", "target": ticker, "attention_weight": 0.080, "lead_days": 5},
+                        {"source": "AMZN", "target": ticker, "attention_weight": 0.060, "lead_days": 5},
+                        {"source": "XLK", "target": ticker, "attention_weight": 0.180},
                     ],
+                    "gat_attention_entropy": 2.15,
+                    "top_spillover_contributor": "TSM",
                 }
             return json.dumps({
                 "jsonrpc": "2.0",
@@ -278,6 +298,10 @@ class JsonRpcUdsServer:
             else:
                 edgar_data = {
                     "ticker": ticker,
+                    "filing_type": "10-Q / 10-K",
+                    "current_filing_date": "2026-10-28",
+                    "prior_filing_date": "2026-07-29",
+                    "acceptance_timestamp_et": "2026-10-28 16:14:22 ET (Shifted T+1)",
                     "item1a_similarity": 0.88,
                     "mda_similarity": 0.74,
                     "item1a_sentiment_drift": -0.04,
@@ -291,7 +315,7 @@ class JsonRpcUdsServer:
                                 "Increased reliance on specialized third-party fabrication for advanced sub-3nm nodes introduces single-source disruption liabilities.",
                             ],
                             "removed_clauses": [
-                                "Legacy semiconductor packaging capacity constraints historically observed in fiscal 2022.",
+                                "Legacy semiconductor packaging capacity constraints historically observed in fiscal 2024.",
                             ],
                         },
                         {
@@ -305,23 +329,23 @@ class JsonRpcUdsServer:
                     ],
                     "form4_transactions": [
                         {
-                            "filing_date": "2024-09-15",
+                            "filing_date": "2026-10-15",
                             "insider_name": "Huang Jen Hsun",
                             "relationship": "CEO & President",
                             "transaction_code": "S",
                             "shares": 120000,
-                            "price": 119.50,
-                            "value": 14340000,
+                            "price": 135.50,
+                            "value": 16260000,
                             "is_10b5_1": True,
                         },
                         {
-                            "filing_date": "2024-08-20",
+                            "filing_date": "2026-09-20",
                             "insider_name": "Stevens Mark A",
                             "relationship": "Director",
                             "transaction_code": "P",
                             "shares": 25000,
-                            "price": 124.80,
-                            "value": 3120000,
+                            "price": 131.80,
+                            "value": 3295000,
                             "is_10b5_1": False,
                         },
                     ],
@@ -339,31 +363,40 @@ class JsonRpcUdsServer:
             else:
                 news_data = [
                     {
+                        "id": f"nw-{ticker}-1",
+                        "ticker": ticker,
                         "headline": f"{ticker} Secures Strategic Hyperscale Cloud Infrastructure Supply Agreement",
                         "source": "Bloomberg News",
-                        "published_at": "2024-11-06T14:30:00Z",
+                        "published_at": "2026-11-06T14:30:00Z",
                         "finbert_score": 0.82,
                         "sentiment_label": "BULLISH",
                         "decay_half_life_days": 3.0,
                         "decayed_sentiment": 0.65,
+                        "category": "EARNINGS",
                     },
                     {
+                        "id": f"nw-{ticker}-2",
+                        "ticker": ticker,
                         "headline": f"Tech Sector Momentum Continues as {ticker} Expands Edge AI Architecture",
                         "source": "Reuters",
-                        "published_at": "2024-11-05T11:15:00Z",
+                        "published_at": "2026-11-05T11:15:00Z",
                         "finbert_score": 0.64,
                         "sentiment_label": "BULLISH",
                         "decay_half_life_days": 3.0,
                         "decayed_sentiment": 0.40,
+                        "category": "PRODUCT",
                     },
                     {
+                        "id": f"nw-{ticker}-3",
+                        "ticker": ticker,
                         "headline": f"Semiconductor Supply Chain Logistics Show Mild Short-Term Bottlenecks",
                         "source": "Dow Jones Newswires",
-                        "published_at": "2024-11-04T09:45:00Z",
+                        "published_at": "2026-11-04T09:45:00Z",
                         "finbert_score": -0.31,
                         "sentiment_label": "BEARISH",
                         "decay_half_life_days": 3.0,
                         "decayed_sentiment": -0.15,
+                        "category": "MACRO",
                     },
                 ]
             return json.dumps({
@@ -380,26 +413,28 @@ class JsonRpcUdsServer:
             else:
                 prices_data = [
                     {
-                        "date": "2024-11-06",
+                        "date": "2026-11-06",
                         "open": 136.50,
                         "high": 139.20,
                         "low": 135.80,
                         "close": 138.25,
+                        "vwap": 137.75,
                         "volume": 42500000,
-                        "overnight_return": 0.008,
-                        "intraday_return": 0.0128,
-                        "total_return": 0.021,
+                        "overnight_return": 0.81,
+                        "intraday_return": 1.28,
+                        "total_return": 2.10,
                     },
                     {
-                        "date": "2024-11-05",
+                        "date": "2026-11-05",
                         "open": 134.80,
                         "high": 136.10,
                         "low": 133.90,
                         "close": 135.40,
+                        "vwap": 135.13,
                         "volume": 38100000,
-                        "overnight_return": 0.004,
-                        "intraday_return": 0.0045,
-                        "total_return": 0.0085,
+                        "overnight_return": 0.40,
+                        "intraday_return": 0.45,
+                        "total_return": 0.85,
                     },
                 ]
             return json.dumps({
@@ -421,6 +456,22 @@ class JsonRpcUdsServer:
                 upside = round(((mean_t - current_p) / current_p) * 100.0, 2)
                 ratings_data = {
                     "ticker": ticker,
+                    "current_price": current_p,
+                    "target_mean": mean_t,
+                    "target_median": median_t,
+                    "target_high": high_t,
+                    "target_low": low_t,
+                    "upside_pct": upside,
+                    "consensus_rating": "BUY",
+                    "consensus_score": 4.46,
+                    "total_analysts": 48,
+                    "ratings_breakdown": {
+                        "strong_buy": 28,
+                        "buy": 15,
+                        "hold": 4,
+                        "underperform": 1,
+                        "sell": 0,
+                    },
                     "consensus_price_target": {
                         "mean": mean_t,
                         "median": median_t,
@@ -450,16 +501,11 @@ class JsonRpcUdsServer:
                     "median": median_t,
                     "high": high_t,
                     "low": low_t,
-                    "current_price": current_p,
-                    "upside_pct": upside,
                     "strong_buy": 28,
                     "buy": 15,
                     "hold": 4,
                     "underperform": 1,
                     "sell": 0,
-                    "total_analysts": 48,
-                    "consensus_score": 4.46,
-                    "consensus_rating": "BUY",
                 }
             return json.dumps({
                 "jsonrpc": "2.0",
@@ -494,13 +540,14 @@ class JsonRpcUdsServer:
                             "dynamic_stop_loss": 131.30 if eff_ticker == "NVDA" else 142.50,
                             "reward_to_risk_ratio": 2.0,
                         }
-                    action = sig.get("action", "HOLD")
-                    conviction = sig.get("conviction_tier", "MEDIUM")
-                    kelly_pct = sig.get("unconstrained_kelly_pct", 0.0)
-                    alloc_pct = sig.get("l1_normalized_portfolio_allocation_pct", kelly_pct)
-                    tp = sig.get("dynamic_take_profit", 0.0)
-                    sl = sig.get("dynamic_stop_loss", 0.0)
-                    rr = sig.get("reward_to_risk_ratio", 2.0)
+                    rec_obj = sig.get("execution_recommendation", sig)
+                    action = rec_obj.get("action", "HOLD")
+                    conviction = rec_obj.get("conviction_tier", "MEDIUM")
+                    kelly_pct = rec_obj.get("unconstrained_kelly_pct", 0.0)
+                    alloc_pct = rec_obj.get("l1_normalized_portfolio_allocation_pct", kelly_pct)
+                    tp = rec_obj.get("dynamic_take_profit", 0.0)
+                    sl = rec_obj.get("dynamic_stop_loss", 0.0)
+                    rr = rec_obj.get("reward_to_risk_ratio", 2.0)
                     resp_text = (
                         f"QARE-MM v1.3 Sizing Recommendation for {eff_ticker}: "
                         f"Action: {action} (Conviction: {conviction}). "
@@ -519,7 +566,7 @@ class JsonRpcUdsServer:
                         reg = {
                             "current_state": "LOW_VOLATILITY",
                             "state_index": 0,
-                            "kappa": 0.50,
+                            "kappa": 0.80,
                             "filtered_probabilities": {
                                 "low_volatility": 0.812,
                                 "medium_volatility": 0.145,
@@ -527,7 +574,7 @@ class JsonRpcUdsServer:
                             },
                         }
                     state = reg.get("current_state", "LOW_VOLATILITY")
-                    kappa = reg.get("kappa", 0.50)
+                    kappa = reg.get("kappa", 0.80)
                     state_idx = reg.get("state_index", 0)
                     probs = reg.get("filtered_probabilities", {})
                     p_low = probs.get("low_volatility", 0.0)
@@ -603,8 +650,20 @@ class JsonRpcUdsServer:
                     "query": query,
                     "ticker": eff_ticker,
                     "tool_routed": tool_routed,
+                    "answer": resp_text,
                     "response": resp_text,
                     "content": resp_text,
+                    "sources": [
+                        f"QARE-MM v1.3 {tool_routed.upper()} Pipeline",
+                        f"SEC EDGAR PIT Lakehouse ({eff_ticker})",
+                        "Forward-Filtered 3-State HMM",
+                    ],
+                    "suggested_commands": [
+                        f"{eff_ticker} PORT <GO>",
+                        f"{eff_ticker} GP <GO>",
+                        "HMM <GO>",
+                    ],
+                    "model": "QARE-MM-v1.3-Copilot",
                     "data": routed_data,
                 }
 

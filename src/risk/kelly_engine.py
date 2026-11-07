@@ -265,9 +265,11 @@ class MultiOutcomeKellySizer:
                 )
 
         p_0 = float(entry_price)
-        dynamic_tp = p_0 * (1.0 + b_upper)
-        dynamic_sl = p_0 * (1.0 - b_lower)
-        r_to_r = float(b_upper / (b_lower + 1e-12))
+        b_u_mag = abs(float(b_upper))
+        b_l_mag = abs(float(b_lower))
+        dynamic_tp = p_0 * (1.0 + b_u_mag)
+        dynamic_sl = p_0 * (1.0 - b_l_mag)
+        r_to_r = float(b_u_mag / (b_l_mag + 1e-12))
 
         return ExecutionRecommendation(
             action=action,

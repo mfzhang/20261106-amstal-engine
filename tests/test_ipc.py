@@ -487,5 +487,52 @@ def test_jsonrpc_uds_server_analyst_ratings_and_copilot_query() -> None:
     assert custom_cq["result"]["tool_routed"] == "custom_llm"
 
 
+def test_negative_b_lower_barrier_orientation_and_live_providers() -> None:
+    """
+    Regression test for BUG-8, BUG-4, BUG-5, BUG-6, BUG-11, BUG-15, BUG-16:
+    Verifies that negative b_lower still produces dynamic_stop_loss < entry_price < dynamic_take_profit
+    and positive reward_to_risk_ratio, and that LiveInferenceProvider produces valid calibrated
+    posteriors, transition_matrix, kappa, and percentage historical returns.
+    """
+    from src.risk.kelly_engine import MultiOutcomeKellySizer
+    from src.ipc.live_providers import LiveInferenceProvider
+
+    sizer = MultiOutcomeKellySizer()
+    rec = sizer.compute_recommendation(
+        p_buy=0.65,
+        p_hold=0.25,
+        p_sell=0.10,
+        b_upper=0.04,
+        b_lower=-0.02,
+        entry_price=137.13,
+        kappa=0.80,
+        execution_mode="LONG_ONLY",
+    )
+    assert rec.dynamic_stop_loss < rec.entry_price < rec.dynamic_take_profit
+    assert rec.reward_to_risk_ratio == pytest.approx(2.0, rel=1e-3)
+
+    provider = LiveInferenceProvider()
+    mr = provider.get_macro_regime()
+    assert "transition_matrix" in mr
+    fp = mr["filtered_probabilities"]
+    expected_kappa = round(0.85 * (1.0 - 0.80 * fp["high_volatility"]) * (1.0 - 0.20 * fp["medium_volatility"]), 2)
+    assert mr["kappa"] == pytest.approx(expected_kappa, abs=0.02)
+
+    sig = provider.get_signal("NVDA")
+    cal = sig["calibration"]["calibrated_probabilities"]
+    assert 0.01 < cal["outperform_buy"] < 0.99
+    assert 0.01 < cal["neutral_hold"] < 0.99
+    assert 0.01 < cal["underperform_sell"] < 0.99
+    assert pytest.approx(cal["outperform_buy"] + cal["neutral_hold"] + cal["underperform_sell"], abs=0.01) == 1.0
+    s_rec = sig["execution_recommendation"]
+    assert s_rec["dynamic_stop_loss"] < s_rec["entry_price"] < s_rec["dynamic_take_profit"]
+    assert s_rec["reward_to_risk_ratio"] > 0
+
+    hp = provider.get_historical_prices("NVDA", count=10)
+    assert len(hp) == 10
+    assert "vwap" in hp[0]
+
+
+
 
 
