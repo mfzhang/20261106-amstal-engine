@@ -8,7 +8,7 @@ import asyncio
 from datetime import datetime, timezone
 import json
 import time
-from typing import Any, Dict, List, Optional, Set
+from typing import Any, Callable, Dict, List, Optional, Set
 
 
 def build_qare_signal_frame(
@@ -115,10 +115,12 @@ class WebSocketBroadcaster:
         host: str = "127.0.0.1",
         port: int = DEFAULT_PORT,
         conflation_interval: float = CONFLATION_INTERVAL_SEC,
+        rpc_handler: Optional[Callable[[str], str]] = None,
     ) -> None:
         self.host = host
         self.port = port
         self.conflation_interval = conflation_interval
+        self.rpc_handler = rpc_handler
         self.pending_ticks: Dict[str, Dict[str, Any]] = {}
         self.pending_signals: Dict[str, Dict[str, Any]] = {}
         self.pending_regime: Optional[Dict[str, Any]] = None
@@ -201,7 +203,16 @@ class WebSocketBroadcaster:
                 "timestamp_ms": int(time.time() * 1000),
             })
             await websocket.send(welcome)
-            await websocket.wait_closed()
+            async for message in websocket:
+                if self.rpc_handler and isinstance(message, str):
+                    try:
+                        resp = self.rpc_handler(message)
+                        if resp:
+                            await websocket.send(resp)
+                    except Exception:
+                        pass
+        except Exception:
+            pass
         finally:
             self.clients.discard(websocket)
 

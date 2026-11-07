@@ -29,7 +29,11 @@ class AmstalEngineDaemon:
         ws_port: int = 8194,
     ) -> None:
         self.uds_server = JsonRpcUdsServer(socket_path=socket_path)
-        self.ws_broadcaster = WebSocketBroadcaster(host=ws_host, port=ws_port)
+        self.ws_broadcaster = WebSocketBroadcaster(
+            host=ws_host,
+            port=ws_port,
+            rpc_handler=self.uds_server.process_message,
+        )
         self._stop_event: Optional[asyncio.Event] = None
 
     async def start(self) -> None:

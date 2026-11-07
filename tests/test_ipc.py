@@ -280,3 +280,75 @@ def test_jsonrpc_uds_server_edgar_news_and_historical_prices() -> None:
     assert "intraday_return" in hp_resp["result"][0]
 
 
+def test_websocket_jsonrpc_dispatch() -> None:
+    class MockWebSocket:
+        def __init__(self, incoming_messages: list[str]) -> None:
+            self.incoming = incoming_messages
+            self.sent: list[str] = []
+            self._idx = 0
+
+        async def send(self, data: str) -> None:
+            self.sent.append(data)
+
+        def __aiter__(self) -> "MockWebSocket":
+            self._idx = 0
+            return self
+
+        async def __anext__(self) -> str:
+            if self._idx < len(self.incoming):
+                msg = self.incoming[self._idx]
+                self._idx += 1
+                return msg
+            raise StopAsyncIteration
+
+    async def _run_test() -> None:
+        server = JsonRpcUdsServer(socket_path="/tmp/test_amstal_ws.sock")
+        broadcaster = WebSocketBroadcaster(
+            host="127.0.0.1",
+            port=8199,
+            rpc_handler=server.process_message,
+        )
+
+        ping_req = json.dumps({
+            "jsonrpc": "2.0",
+            "method": "ping",
+            "params": {"timestamp": 12345},
+            "id": "ws-rpc-ping",
+        })
+        cmd_req = json.dumps({
+            "jsonrpc": "2.0",
+            "method": "execute_command",
+            "params": {"raw_input": "NVDA US <EQUITY> DES <GO>"},
+            "id": "ws-rpc-cmd",
+        })
+
+        mock_ws = MockWebSocket([ping_req, cmd_req])
+        await broadcaster.register_client(mock_ws)
+
+        assert len(mock_ws.sent) == 3
+
+        # 1. First message is connection greeting
+        greeting = json.loads(mock_ws.sent[0])
+        assert greeting["type"] == "CONNECTION_ESTABLISHED"
+        assert greeting["port"] == 8199
+
+        # 2. Second message is ping response
+        resp = json.loads(mock_ws.sent[1])
+        assert resp["jsonrpc"] == "2.0"
+        assert resp["id"] == "ws-rpc-ping"
+        assert resp["result"]["status"] == "PONG"
+        assert resp["result"]["client_timestamp"] == 12345
+
+        # 3. Third message is command response
+        cmd_resp = json.loads(mock_ws.sent[2])
+        assert cmd_resp["jsonrpc"] == "2.0"
+        assert cmd_resp["id"] == "ws-rpc-cmd"
+        assert cmd_resp["result"]["status"] == "COMMAND_PROCESSED"
+        assert cmd_resp["result"]["parsed"]["identifier"] == "NVDA"
+        assert cmd_resp["result"]["parsed"]["mnemonic"] == "DES"
+
+    import asyncio
+    asyncio.run(_run_test())
+
+
+
