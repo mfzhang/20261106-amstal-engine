@@ -27,6 +27,8 @@ class TemperatureScaler:
         """
         probs = np.asarray(raw_probs, dtype=np.float64)
         y = np.asarray(y_val, dtype=int)
+        if probs.ndim == 1:
+            probs = probs.reshape(1, -1)
         n_samples = len(y)
 
         if n_samples == 0:
@@ -60,11 +62,16 @@ class TemperatureScaler:
         if len(probs) == 0 or abs(self.temperature_ - 1.0) < 1e-5:
             return probs
 
+        is_1d = (probs.ndim == 1)
+        if is_1d:
+            probs = probs.reshape(1, -1)
+
         clipped_probs = np.clip(probs, 1e-12, 1.0 - 1e-12)
         logits = np.log(clipped_probs)
         scaled_logits = logits / self.temperature_
         log_denom = logsumexp(scaled_logits, axis=1, keepdims=True)
-        return np.exp(scaled_logits - log_denom)
+        res = np.exp(scaled_logits - log_denom)
+        return res.squeeze(0) if is_1d else res
 
     def fit_transform(self, raw_probs: np.ndarray, y_val: np.ndarray) -> np.ndarray:
         self.fit(raw_probs, y_val)

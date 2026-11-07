@@ -24,6 +24,7 @@ class ExecutionRecommendation:
     dynamic_stop_loss: float
     reward_to_risk_ratio: float
     estimated_round_trip_cost_bps: float = 15.0
+    execution_mode: str = "LONG_ONLY"
 
     def to_dict(self) -> Dict[str, Any]:
         return {
@@ -62,11 +63,13 @@ class MultiOutcomeKellySizer:
         soft_ceiling: float = SOFT_CEILING,
         hard_cap: float = HARD_CAP,
         prior_probs: Optional[Tuple[float, float, float]] = None,
+        execution_mode: str = "LONG_ONLY",
     ) -> None:
         self.round_trip_cost = round_trip_cost
         self.soft_ceiling = soft_ceiling
         self.hard_cap = hard_cap
         self.prior_probs = prior_probs
+        self.execution_mode = execution_mode
 
     @staticmethod
     def center_payoffs(
@@ -183,6 +186,7 @@ class MultiOutcomeKellySizer:
         b_vert: float = 0.0,
         l1_normalized_pct: Optional[float] = None,
         prior_probs: Optional[Tuple[float, float, float]] = None,
+        execution_mode: Optional[str] = None,
     ) -> ExecutionRecommendation:
         """
         Generates full execution recommendation matching QARE-MM v1.3 Target Output Contract.
@@ -202,6 +206,8 @@ class MultiOutcomeKellySizer:
             b_vert=b_vert,
             prior_probs=prior_probs,
         )
+
+        mode = execution_mode or getattr(self, "execution_mode", "LONG_ONLY")
 
         # Macro regime scaling: f_regime = min(f* * kappa, HARD_CAP)
         kappa_clamped = float(np.clip(kappa, 0.25, 0.50))
@@ -223,16 +229,45 @@ class MultiOutcomeKellySizer:
         else:
             action = "HOLD"
 
+        # Gate 4 Criterion 4: Execution Mode Integrity
+        if mode == "LONG_ONLY":
+            # In LONG_ONLY mode, exits to cash (f_i* = 0.0%) on Sell and Hold signals,
+            # never opening negative weights.
+            if action in ("HOLD", "SELL"):
+                f_star = 0.0
+                f_regime = 0.0
+                norm_pct = 0.0
+            else:
+                norm_pct = (
+                    l1_normalized_pct
+                    if l1_normalized_pct is not None
+                    else f_regime * 100.0
+                )
+        else:
+            # LONG_SHORT diagnostic stat-arb mode
+            if action == "SELL":
+                f_star = -f_star if f_star > 0 else -0.05
+                f_regime = float(np.clip(f_star * kappa_clamped, -self.hard_cap, 0.0))
+                norm_pct = (
+                    l1_normalized_pct
+                    if l1_normalized_pct is not None
+                    else f_regime * 100.0
+                )
+            elif action == "HOLD":
+                f_star = 0.0
+                f_regime = 0.0
+                norm_pct = 0.0
+            else:
+                norm_pct = (
+                    l1_normalized_pct
+                    if l1_normalized_pct is not None
+                    else f_regime * 100.0
+                )
+
         p_0 = float(entry_price)
         dynamic_tp = p_0 * (1.0 + b_upper)
         dynamic_sl = p_0 * (1.0 - b_lower)
         r_to_r = float(b_upper / (b_lower + 1e-12))
-
-        norm_pct = (
-            l1_normalized_pct
-            if l1_normalized_pct is not None
-            else f_regime * 100.0
-        )
 
         return ExecutionRecommendation(
             action=action,
@@ -245,6 +280,7 @@ class MultiOutcomeKellySizer:
             dynamic_stop_loss=dynamic_sl,
             reward_to_risk_ratio=r_to_r,
             estimated_round_trip_cost_bps=self.round_trip_cost * 10000.0,
+            execution_mode=mode,
         )
 
 
@@ -254,11 +290,13 @@ class PortfolioExposureNormalizer:
     w_i = (f_i* * kappa_i) / max(1.0, sum_{j=1}^N |f_j* * kappa_j|)
     Guarantees sum_{i=1}^N |w_i| <= 1.0 (100% gross equity exposure),
     eliminating leverage blowups while preserving relative conviction weights.
+    In LONG_ONLY mode, enforces non-negative allocations (w_i >= 0.0).
     """
 
     @staticmethod
     def normalize_weights(
         raw_allocations: Dict[str, float],
+        execution_mode: str = "LONG_ONLY",
     ) -> Dict[str, float]:
         """
         Normalizes single-stock fractional Kelly allocations across the portfolio.
@@ -268,20 +306,29 @@ class PortfolioExposureNormalizer:
         if not raw_allocations:
             return {}
 
-        total_gross_exposure = float(sum(abs(w) for w in raw_allocations.values()))
+        allocs = {
+            t: (max(0.0, float(w)) if execution_mode == "LONG_ONLY" else float(w))
+            for t, w in raw_allocations.items()
+        }
+        total_gross_exposure = float(sum(abs(w) for w in allocs.values()))
         normalizer = max(1.0, total_gross_exposure)
 
         return {
             ticker: float(w / normalizer)
-            for ticker, w in raw_allocations.items()
+            for ticker, w in allocs.items()
         }
 
     @staticmethod
-    def normalize_array(raw_weights: np.ndarray) -> np.ndarray:
+    def normalize_array(
+        raw_weights: np.ndarray,
+        execution_mode: str = "LONG_ONLY",
+    ) -> np.ndarray:
         """
         Vectorized normalization for an array of asset weights.
         """
         w = np.asarray(raw_weights, dtype=np.float64)
-        total_gross = np.sum(np.abs(w))
+        if execution_mode == "LONG_ONLY":
+            w = np.maximum(0.0, w)
+        total_gross = float(np.sum(np.abs(w)))
         normalizer = max(1.0, total_gross)
         return w / normalizer
