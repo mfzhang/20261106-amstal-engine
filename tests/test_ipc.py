@@ -197,3 +197,37 @@ def test_websocket_broadcaster_conflation() -> None:
     # Subsequent flush must be empty
     assert broadcaster.has_pending_data() is False
     assert broadcaster.flush_conflated_frame() is None
+
+
+def test_jsonrpc_uds_server_security_master_and_peer_graph() -> None:
+    server = JsonRpcUdsServer(socket_path="/tmp/test_amstal.sock")
+
+    # 1. get_security_master
+    sm_req = json.dumps({
+        "jsonrpc": "2.0",
+        "method": "get_security_master",
+        "params": {"ticker": "NVDA"},
+        "id": "sm-1",
+    })
+    sm_resp = json.loads(server.process_message(sm_req))
+    assert sm_resp["jsonrpc"] == "2.0"
+    assert sm_resp["id"] == "sm-1"
+    assert sm_resp["result"]["ticker"] == "NVDA"
+    assert "gics_sector" in sm_resp["result"]
+    assert "beta_market_60d" in sm_resp["result"]
+
+    # 2. get_peer_graph
+    pg_req = json.dumps({
+        "jsonrpc": "2.0",
+        "method": "get_peer_graph",
+        "params": {"ticker": "NVDA"},
+        "id": "pg-1",
+    })
+    pg_resp = json.loads(server.process_message(pg_req))
+    assert pg_resp["jsonrpc"] == "2.0"
+    assert pg_resp["id"] == "pg-1"
+    assert pg_resp["result"]["target_ticker"] == "NVDA"
+    assert len(pg_resp["result"]["nodes"]) == 10
+    assert len(pg_resp["result"]["edges"]) >= 9
+    assert pg_resp["result"]["nodes"][0]["role"] == "TARGET"
+

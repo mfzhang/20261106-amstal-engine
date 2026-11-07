@@ -90,11 +90,15 @@ class JsonRpcUdsServer:
         signal_provider: Optional[Callable[[str], Dict[str, Any]]] = None,
         portfolio_provider: Optional[Callable[[], Dict[str, Any]]] = None,
         regime_provider: Optional[Callable[[], Dict[str, Any]]] = None,
+        security_master_provider: Optional[Callable[[str], Dict[str, Any]]] = None,
+        peer_graph_provider: Optional[Callable[[str], Dict[str, Any]]] = None,
     ) -> None:
         self.socket_path = socket_path
         self.signal_provider = signal_provider
         self.portfolio_provider = portfolio_provider
         self.regime_provider = regime_provider
+        self.security_master_provider = security_master_provider
+        self.peer_graph_provider = peer_graph_provider
         self.server: Optional[asyncio.AbstractServer] = None
         self.is_running: bool = False
 
@@ -192,6 +196,68 @@ class JsonRpcUdsServer:
             return json.dumps({
                 "jsonrpc": "2.0",
                 "result": regime_data,
+                "id": req_id,
+            })
+
+        elif method == "get_security_master":
+            ticker = params.get("ticker", "SPY").upper()
+            if self.security_master_provider:
+                master_data = self.security_master_provider(ticker)
+            else:
+                master_data = {
+                    "ticker": ticker,
+                    "company_name": f"{ticker} Inc.",
+                    "primary_exchange": "NASDAQ",
+                    "cik": "0001045810",
+                    "figi": f"BBG000{ticker}001",
+                    "gics_sector": "Information Technology",
+                    "gics_sub_industry": "Semiconductors",
+                    "beta_market_60d": 1.25,
+                    "beta_sector_60d": 1.08,
+                    "adv_30d_shares": 45000000,
+                    "market_cap_billions": 3250.5,
+                    "business_summary": f"{ticker} designs high-performance accelerated computing platforms for enterprise AI workloads.",
+                }
+            return json.dumps({
+                "jsonrpc": "2.0",
+                "result": master_data,
+                "id": req_id,
+            })
+
+        elif method == "get_peer_graph":
+            ticker = params.get("ticker", "SPY").upper()
+            if self.peer_graph_provider:
+                graph_data = self.peer_graph_provider(ticker)
+            else:
+                graph_data = {
+                    "target_ticker": ticker,
+                    "nodes": [
+                        {"id": ticker, "role": "TARGET", "role_code": 0.0, "label": ticker},
+                        {"id": "AMD", "role": "GICS_PEER", "role_code": 0.33, "label": "AMD"},
+                        {"id": "AVGO", "role": "GICS_PEER", "role_code": 0.33, "label": "AVGO"},
+                        {"id": "QCOM", "role": "GICS_PEER", "role_code": 0.33, "label": "QCOM"},
+                        {"id": "INTC", "role": "GICS_PEER", "role_code": 0.33, "label": "INTC"},
+                        {"id": "TSM", "role": "LEAD_LAG", "role_code": 0.66, "label": "TSM", "cross_corr_5d": 0.68},
+                        {"id": "ASML", "role": "LEAD_LAG", "role_code": 0.66, "label": "ASML", "cross_corr_5d": 0.61},
+                        {"id": "MSFT", "role": "LEAD_LAG", "role_code": 0.66, "label": "MSFT", "cross_corr_5d": 0.54},
+                        {"id": "AMZN", "role": "LEAD_LAG", "role_code": 0.66, "label": "AMZN", "cross_corr_5d": 0.51},
+                        {"id": "XLK", "role": "SECTOR_ETF", "role_code": 1.0, "label": "XLK"},
+                    ],
+                    "edges": [
+                        {"source": ticker, "target": "AMD", "attention_weight": 0.165},
+                        {"source": ticker, "target": "AVGO", "attention_weight": 0.142},
+                        {"source": ticker, "target": "QCOM", "attention_weight": 0.118},
+                        {"source": ticker, "target": "INTC", "attention_weight": 0.085},
+                        {"source": "TSM", "target": ticker, "attention_weight": 0.185, "lead_days": 5},
+                        {"source": "ASML", "target": ticker, "attention_weight": 0.134, "lead_days": 5},
+                        {"source": "MSFT", "target": ticker, "attention_weight": 0.098, "lead_days": 5},
+                        {"source": "AMZN", "target": ticker, "attention_weight": 0.073, "lead_days": 5},
+                        {"source": "XLK", "target": ticker, "attention_weight": 0.220},
+                    ],
+                }
+            return json.dumps({
+                "jsonrpc": "2.0",
+                "result": graph_data,
                 "id": req_id,
             })
 
