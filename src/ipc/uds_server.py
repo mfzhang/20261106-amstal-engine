@@ -9,7 +9,7 @@ import json
 import os
 import re
 import time
-from typing import Any, Callable, Dict, Optional, Tuple
+from typing import Any, Callable, Dict, List, Optional, Tuple
 
 
 def parse_mnemonic_command(raw_input: str) -> Dict[str, Any]:
@@ -92,6 +92,9 @@ class JsonRpcUdsServer:
         regime_provider: Optional[Callable[[], Dict[str, Any]]] = None,
         security_master_provider: Optional[Callable[[str], Dict[str, Any]]] = None,
         peer_graph_provider: Optional[Callable[[str], Dict[str, Any]]] = None,
+        edgar_provider: Optional[Callable[[str], Dict[str, Any]]] = None,
+        news_provider: Optional[Callable[[str], List[Dict[str, Any]]]] = None,
+        historical_prices_provider: Optional[Callable[[str, int], List[Dict[str, Any]]]] = None,
     ) -> None:
         self.socket_path = socket_path
         self.signal_provider = signal_provider
@@ -99,6 +102,9 @@ class JsonRpcUdsServer:
         self.regime_provider = regime_provider
         self.security_master_provider = security_master_provider
         self.peer_graph_provider = peer_graph_provider
+        self.edgar_provider = edgar_provider
+        self.news_provider = news_provider
+        self.historical_prices_provider = historical_prices_provider
         self.server: Optional[asyncio.AbstractServer] = None
         self.is_running: bool = False
 
@@ -258,6 +264,143 @@ class JsonRpcUdsServer:
             return json.dumps({
                 "jsonrpc": "2.0",
                 "result": graph_data,
+                "id": req_id,
+            })
+
+        elif method == "get_edgar_filings":
+            ticker = params.get("ticker", "SPY").upper()
+            if self.edgar_provider:
+                edgar_data = self.edgar_provider(ticker)
+            else:
+                edgar_data = {
+                    "ticker": ticker,
+                    "item1a_similarity": 0.88,
+                    "mda_similarity": 0.74,
+                    "item1a_sentiment_drift": -0.04,
+                    "mda_catalyst_score": 0.28,
+                    "redlines": [
+                        {
+                            "section": "Item 1A Risk Factors",
+                            "status": "MODIFIED",
+                            "added_clauses": [
+                                "Export controls and geopolitical tensions surrounding high-bandwidth AI accelerators could impact regional supply chain fluidity.",
+                                "Increased reliance on specialized third-party fabrication for advanced sub-3nm nodes introduces single-source disruption liabilities.",
+                            ],
+                            "removed_clauses": [
+                                "Legacy semiconductor packaging capacity constraints historically observed in fiscal 2022.",
+                            ],
+                        },
+                        {
+                            "section": "Item 7 MD&A",
+                            "status": "MODIFIED",
+                            "added_clauses": [
+                                "Data Center revenue expanded by 154% year-over-year driven by compute architecture adoption across cloud hyperscalers.",
+                            ],
+                            "removed_clauses": [],
+                        },
+                    ],
+                    "form4_transactions": [
+                        {
+                            "filing_date": "2024-09-15",
+                            "insider_name": "Huang Jen Hsun",
+                            "relationship": "CEO & President",
+                            "transaction_code": "S",
+                            "shares": 120000,
+                            "price": 119.50,
+                            "value": 14340000,
+                            "is_10b5_1": True,
+                        },
+                        {
+                            "filing_date": "2024-08-20",
+                            "insider_name": "Stevens Mark A",
+                            "relationship": "Director",
+                            "transaction_code": "P",
+                            "shares": 25000,
+                            "price": 124.80,
+                            "value": 3120000,
+                            "is_10b5_1": False,
+                        },
+                    ],
+                }
+            return json.dumps({
+                "jsonrpc": "2.0",
+                "result": edgar_data,
+                "id": req_id,
+            })
+
+        elif method == "get_news_feed":
+            ticker = params.get("ticker", "SPY").upper()
+            if self.news_provider:
+                news_data = self.news_provider(ticker)
+            else:
+                news_data = [
+                    {
+                        "headline": f"{ticker} Secures Strategic Hyperscale Cloud Infrastructure Supply Agreement",
+                        "source": "Bloomberg News",
+                        "published_at": "2024-11-06T14:30:00Z",
+                        "finbert_score": 0.82,
+                        "sentiment_label": "BULLISH",
+                        "decay_half_life_days": 3.0,
+                        "decayed_sentiment": 0.65,
+                    },
+                    {
+                        "headline": f"Tech Sector Momentum Continues as {ticker} Expands Edge AI Architecture",
+                        "source": "Reuters",
+                        "published_at": "2024-11-05T11:15:00Z",
+                        "finbert_score": 0.64,
+                        "sentiment_label": "BULLISH",
+                        "decay_half_life_days": 3.0,
+                        "decayed_sentiment": 0.40,
+                    },
+                    {
+                        "headline": f"Semiconductor Supply Chain Logistics Show Mild Short-Term Bottlenecks",
+                        "source": "Dow Jones Newswires",
+                        "published_at": "2024-11-04T09:45:00Z",
+                        "finbert_score": -0.31,
+                        "sentiment_label": "BEARISH",
+                        "decay_half_life_days": 3.0,
+                        "decayed_sentiment": -0.15,
+                    },
+                ]
+            return json.dumps({
+                "jsonrpc": "2.0",
+                "result": news_data,
+                "id": req_id,
+            })
+
+        elif method == "get_historical_prices":
+            ticker = params.get("ticker", "SPY").upper()
+            count = int(params.get("count", 30))
+            if self.historical_prices_provider:
+                prices_data = self.historical_prices_provider(ticker, count)
+            else:
+                prices_data = [
+                    {
+                        "date": "2024-11-06",
+                        "open": 136.50,
+                        "high": 139.20,
+                        "low": 135.80,
+                        "close": 138.25,
+                        "volume": 42500000,
+                        "overnight_return": 0.008,
+                        "intraday_return": 0.0128,
+                        "total_return": 0.021,
+                    },
+                    {
+                        "date": "2024-11-05",
+                        "open": 134.80,
+                        "high": 136.10,
+                        "low": 133.90,
+                        "close": 135.40,
+                        "volume": 38100000,
+                        "overnight_return": 0.004,
+                        "intraday_return": 0.0045,
+                        "total_return": 0.0085,
+                    },
+                ]
+            return json.dumps({
+                "jsonrpc": "2.0",
+                "result": prices_data,
                 "id": req_id,
             })
 

@@ -231,3 +231,52 @@ def test_jsonrpc_uds_server_security_master_and_peer_graph() -> None:
     assert len(pg_resp["result"]["edges"]) >= 9
     assert pg_resp["result"]["nodes"][0]["role"] == "TARGET"
 
+
+def test_jsonrpc_uds_server_edgar_news_and_historical_prices() -> None:
+    server = JsonRpcUdsServer(socket_path="/tmp/test_amstal.sock")
+
+    # 1. get_edgar_filings
+    edgar_req = json.dumps({
+        "jsonrpc": "2.0",
+        "method": "get_edgar_filings",
+        "params": {"ticker": "NVDA"},
+        "id": "edgar-1",
+    })
+    edgar_resp = json.loads(server.process_message(edgar_req))
+    assert edgar_resp["jsonrpc"] == "2.0"
+    assert edgar_resp["id"] == "edgar-1"
+    assert "item1a_similarity" in edgar_resp["result"]
+    assert "redlines" in edgar_resp["result"]
+    assert "form4_transactions" in edgar_resp["result"]
+    assert len(edgar_resp["result"]["form4_transactions"]) > 0
+
+    # 2. get_news_feed
+    news_req = json.dumps({
+        "jsonrpc": "2.0",
+        "method": "get_news_feed",
+        "params": {"ticker": "NVDA"},
+        "id": "news-1",
+    })
+    news_resp = json.loads(server.process_message(news_req))
+    assert news_resp["jsonrpc"] == "2.0"
+    assert news_resp["id"] == "news-1"
+    assert isinstance(news_resp["result"], list)
+    assert len(news_resp["result"]) >= 2
+    assert "finbert_score" in news_resp["result"][0]
+    assert "decayed_sentiment" in news_resp["result"][0]
+
+    # 3. get_historical_prices
+    hp_req = json.dumps({
+        "jsonrpc": "2.0",
+        "method": "get_historical_prices",
+        "params": {"ticker": "NVDA", "count": 20},
+        "id": "hp-1",
+    })
+    hp_resp = json.loads(server.process_message(hp_req))
+    assert hp_resp["jsonrpc"] == "2.0"
+    assert hp_resp["id"] == "hp-1"
+    assert isinstance(hp_resp["result"], list)
+    assert "overnight_return" in hp_resp["result"][0]
+    assert "intraday_return" in hp_resp["result"][0]
+
+
