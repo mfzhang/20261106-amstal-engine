@@ -72,10 +72,9 @@ class AmstalEngineDaemon:
                     utc_now = datetime.datetime.now(datetime.timezone.utc)
                     # Check market hours: Mon-Fri (0-4), 13:30 to 21:00 UTC
                     is_market_open = utc_now.weekday() < 5 and (13.5 <= utc_now.hour + utc_now.minute / 60.0 <= 21.0)
-                    jitter = random.uniform(-0.0012, 0.0012) * entry_p if is_market_open else 0.0
-                    live_p = round(entry_p + jitter, 2)
-                    chg = round(live_p - entry_p, 2) if is_market_open else round(entry_p * 0.0009, 2)
-                    chg_pct = round((chg / max(entry_p, 1e-6)) * 100.0, 2)
+                    live_p = entry_p
+                    chg = 0.0
+                    chg_pct = 0.0
                     self.ws_broadcaster.queue_tick(
                         sym,
                         {
@@ -83,7 +82,7 @@ class AmstalEngineDaemon:
                             "price": live_p,
                             "change": chg,
                             "change_pct": chg_pct,
-                            "volume": 42500000 + (step * 12500) % 5000000,
+                            "volume": 42500000,
                         },
                     )
                     step += 1
