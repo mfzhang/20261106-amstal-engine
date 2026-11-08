@@ -64,7 +64,8 @@ class AmstalEngineDaemon:
                 if self.ws_broadcaster.clients:
                     regime = self.live_provider.get_macro_regime()
                     self.ws_broadcaster.queue_regime(regime)
-                    sym = watchlist[step % len(watchlist)]
+                    active_pool = list(dict.fromkeys(watchlist + list(self.uds_server.active_tickers)))
+                    sym = active_pool[step % len(active_pool)]
                     sig = self.live_provider.get_signal(sym)
                     self.ws_broadcaster.queue_signal(sym, sig)
                     entry_p = float(sig.get("execution_recommendation", {}).get("entry_price", 138.25))

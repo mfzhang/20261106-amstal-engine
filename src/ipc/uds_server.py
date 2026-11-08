@@ -9,7 +9,7 @@ import json
 import os
 import re
 import time
-from typing import Any, Callable, Dict, List, Optional, Tuple
+from typing import Any, Callable, Dict, List, Optional, Set, Tuple
 
 
 def parse_mnemonic_command(raw_input: str) -> Dict[str, Any]:
@@ -109,6 +109,7 @@ class JsonRpcUdsServer:
         self.historical_prices_provider = historical_prices_provider
         self.analyst_ratings_provider = analyst_ratings_provider
         self.copilot_query_provider = copilot_query_provider
+        self.active_tickers: Set[str] = set()
         self.server: Optional[asyncio.AbstractServer] = None
         self.is_running: bool = False
 
@@ -138,6 +139,9 @@ class JsonRpcUdsServer:
             })
 
         # Method dispatch
+        if "ticker" in params and isinstance(params["ticker"], str) and params["ticker"]:
+            self.active_tickers.add(params["ticker"].upper())
+
         if method == "ping":
             return json.dumps({
                 "jsonrpc": "2.0",
@@ -155,6 +159,8 @@ class JsonRpcUdsServer:
             # Merge client-provided parsed parameters if available
             if "parsed" in params and isinstance(params["parsed"], dict):
                 parsed.update(params["parsed"])
+            if parsed.get("identifier"):
+                self.active_tickers.add(str(parsed["identifier"]).upper())
 
             return json.dumps({
                 "jsonrpc": "2.0",
