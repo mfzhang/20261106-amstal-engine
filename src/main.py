@@ -41,6 +41,7 @@ class AmstalEngineDaemon:
                 regime_provider=self.live_provider.get_macro_regime,
                 security_master_provider=self.live_provider.get_security_master,
                 historical_prices_provider=self.live_provider.get_historical_prices,
+                analyst_ratings_provider=self.live_provider.get_analyst_ratings,
             )
         else:
             logger.warning("No production weights found. Initializing JsonRpcUdsServer in reference stub mode.")

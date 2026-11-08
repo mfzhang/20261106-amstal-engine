@@ -532,6 +532,22 @@ def test_negative_b_lower_barrier_orientation_and_live_providers() -> None:
     assert len(hp) == 10
     assert "vwap" in hp[0]
 
+    # Verify BA resolves from lakehouse with authentic pricing (~176.55)
+    ba_sig = provider.get_signal("BA")
+    ba_rec = ba_sig["execution_recommendation"]
+    assert ba_rec["entry_price"] == pytest.approx(176.55, abs=0.5)
+    assert ba_rec["dynamic_stop_loss"] < ba_rec["entry_price"] < ba_rec["dynamic_take_profit"]
+
+    ba_sm = provider.get_security_master("BA")
+    assert ba_sm["company_name"] == "Boeing Co."
+    assert ba_sm["gics_sector"] == "Industrials"
+    assert ba_sm["high_52w"] == 262.22
+    assert ba_sm["low_52w"] == 137.03
+
+    ba_anr = provider.get_analyst_ratings("BA")
+    assert ba_anr["current_price"] == pytest.approx(176.55, abs=0.5)
+    assert ba_anr["target_mean"] > ba_anr["current_price"]
+
 
 
 
