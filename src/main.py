@@ -59,9 +59,28 @@ class AmstalEngineDaemon:
         """Periodically queues conflated tick, signal, and regime updates for connected WebSocket clients."""
         watchlist = ["NVDA", "MSFT", "AAPL", "CRWD", "SPY", "TSLA"]
         step = 0
+        last_closed_broadcast = 0.0
         while self._stop_event and not self._stop_event.is_set():
             try:
                 if self.ws_broadcaster.clients:
+                    utc_now = datetime.datetime.now(datetime.timezone.utc)
+                    # Check market hours: Mon-Fri (0-4), 13:30 to 21:00 UTC
+                    is_market_open = utc_now.weekday() < 5 and (13.5 <= utc_now.hour + utc_now.minute / 60.0 <= 21.0)
+                    now_ts = time.time()
+
+                    if not is_market_open:
+                        # Off-market hours: Throttle broadcast to once every 15s to conserve CPU
+                        if now_ts - last_closed_broadcast >= 15.0:
+                            regime = self.live_provider.get_macro_regime()
+                            self.ws_broadcaster.queue_regime(regime)
+                            for sym in watchlist:
+                                sig = self.live_provider.get_signal(sym)
+                                self.ws_broadcaster.queue_signal(sym, sig)
+                            last_closed_broadcast = now_ts
+                        await asyncio.sleep(5.0)
+                        continue
+
+                    # Active session: stream conflated updates
                     regime = self.live_provider.get_macro_regime()
                     self.ws_broadcaster.queue_regime(regime)
                     active_pool = list(dict.fromkeys(watchlist + list(self.uds_server.active_tickers)))
@@ -69,26 +88,23 @@ class AmstalEngineDaemon:
                     sig = self.live_provider.get_signal(sym)
                     self.ws_broadcaster.queue_signal(sym, sig)
                     entry_p = float(sig.get("execution_recommendation", {}).get("entry_price", 138.25))
-                    utc_now = datetime.datetime.now(datetime.timezone.utc)
-                    # Check market hours: Mon-Fri (0-4), 13:30 to 21:00 UTC
-                    is_market_open = utc_now.weekday() < 5 and (13.5 <= utc_now.hour + utc_now.minute / 60.0 <= 21.0)
-                    live_p = entry_p
-                    chg = 0.0
-                    chg_pct = 0.0
                     self.ws_broadcaster.queue_tick(
                         sym,
                         {
                             "ticker": sym,
-                            "price": live_p,
-                            "change": chg,
-                            "change_pct": chg_pct,
+                            "price": entry_p,
+                            "change": 0.0,
+                            "change_pct": 0.0,
                             "volume": 42500000,
                         },
                     )
                     step += 1
+                    await asyncio.sleep(1.0)
+                else:
+                    await asyncio.sleep(2.0)
             except Exception as e:
                 logger.debug(f"Stream feed loop warning: {e}")
-            await asyncio.sleep(0.5)
+                await asyncio.sleep(2.0)
 
     async def start(self) -> None:
         logger.info("Initializing Amstal Quantitative Alpha & Risk Engine (QARE-MM v1.3)...")

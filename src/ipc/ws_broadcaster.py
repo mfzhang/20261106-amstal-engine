@@ -199,9 +199,13 @@ class WebSocketBroadcaster:
             self.clients.difference_update(disconnected)
 
     async def _conflation_loop(self) -> None:
-        """Background loop executing every 100ms."""
+        """Background loop executing conflation flushes."""
         while self.is_running:
             try:
+                # If no clients or no pending data, back off to conserve CPU
+                if not self.clients or not self.has_pending_data():
+                    await asyncio.sleep(0.25)
+                    continue
                 await asyncio.sleep(self.conflation_interval)
                 await self.broadcast_conflated_updates()
             except asyncio.CancelledError:
