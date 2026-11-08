@@ -77,7 +77,6 @@ The system is architected to provide hedge-fund caliber Point-in-Time (PIT) data
 │  │   • Engine Process Supervisor: Spawns, health-checks (2s ping), and gracefully terminates engine daemon    │  │
 │  │   • UDS & WebSocket Client: Multiplexes incoming data streams to webview frontend                          │  │
 │  │   • Stateless DuckDB Reader: Queries immutable `.parquet` files directly in Rust (`:memory:`, <15ms)       │  │
-│  │   • Hardware Interface: Listens to QMK/VIA USB keyboard events (Starboard macros, Rotary encoder)          │  │
 │  └─────────────────────────────────────────────────────┬──────────────────────────────────────────────────────┘  │
 │                                                        │ Direct Native IPC                                       │
 │                                                        ▼                                                         │
@@ -87,7 +86,7 @@ The system is architected to provide hedge-fund caliber Point-in-Time (PIT) data
 │  │   • Mnemonic Omnibar REPL: Autocomplete parser (`AAPL US <EQUITY> DES <GO>`) + fuzzy hybrid search (`cmdk`)│  │
 │  │   • Channel Linking System: Multi-color broadcast channels (Blue/Amber/Green/Red) syncing active security  │  │
 │  │   • Tier 1 Core (Phase 4A): `GP <GO>` (Charts), `PORT <GO>` (Kelly/Signals), `HMM <GO>`, `DES`, `FA <GO>`  │  │
-│  │   • Tier 2 Suite (Phase 4B): `SPLC <GO>` (Peer GAT), `EDGAR <GO>`, `NEWS`, `HP`, `ANR`, Copilot & QMK      │  │
+│  │   • Tier 2 Suite (Phase 4B): `SPLC <GO>` (Peer GAT), `EDGAR <GO>`, `NEWS`, `HP`, `ANR`, Local Copilot      │  │
 │  └────────────────────────────────────────────────────────────────────────────────────────────────────────────┘  │
 └──────────────────────────────────────────────────────────────────────────────────────────────────────────────────┘
 ```
@@ -225,7 +224,7 @@ Amstal recreates Bloomberg's Reverse Polish Notation (RPN) command workflow via 
 5. **`FA <GO>` (Point-in-Time Financial Analysis)**:
    * 10-year quarterly and annual Income Statement, Balance Sheet, and Cash Flow tables stamped strictly by SEC XBRL `filed` acceptance date (preventing back-dated restatement look-ahead).
 
-#### Tier 2: Alt-Data, Graph & Hardware Suite (Phase 4B)
+#### Tier 2: Alt-Data & Graph Suite (Phase 4B)
 6. **`SPLC <GO>` (Dynamic Rolling Peer Graph)**:
    * Force-directed interactive graph rendering the 10-node subgraph ($v_0$ target, $v_1 \dots v_4$ GICS peers, $v_5 \dots v_8$ 5-day lead-lag cross-correlation peers, $v_9$ Sector ETF) and GAT attention weights.
 7. **`EDGAR <GO>` (SEC 10-Q/10-K Redlines & Form 4 Clusters)**:
@@ -234,8 +233,8 @@ Amstal recreates Bloomberg's Reverse Polish Notation (RPN) command workflow via 
    * Real-time headline feed with FinBERT sentiment scores and exponential decay curves ($\tau = 3.0\text{d}$).
 9. **`HP <GO>` & `ANR <GO>`**:
    * Tabular historical prices with overnight/intraday splits (`HP`) and analyst consensus target distributions (`ANR`).
-10. **Local Copilot & Starboard QMK Hardware**:
-    * Embedded Ollama + LanceDB RAG assistant and QMK/VIA custom keyboard hid listener (`F1–F10` asset macros, green `<GO>`, red `<CANCEL>`, rotary candlestick scrubber).
+10. **Local Copilot (`HELP <GO>`)**:
+    * Embedded Ollama + LanceDB RAG assistant for natural language equity and quantitative research queries.
 
 ### 3.3 4-Panel Reactive Split-Pane Grid (`paneforge` + Svelte 5 Runes)
 Instead of legacy imperative DOM layout managers (such as GoldenLayout) that conflict with Svelte 5's reactive lifecycle, `WorkspaceGrid.svelte` uses `paneforge` and CSS Grid backed by Svelte 5 runes (`$state`, `$derived`):

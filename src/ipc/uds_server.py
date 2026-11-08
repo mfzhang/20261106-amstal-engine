@@ -9,7 +9,13 @@ import json
 import os
 import re
 import time
-from typing import Any, Callable, Dict, List, Optional, Set, Tuple
+from typing import Any, Callable, Dict, List, Optional, Set
+
+KNOWN_MNEMONICS = {
+    "HMM", "PORT", "GP", "FA", "DES", "HELP", "TOP",
+    "SPLC", "EDGAR", "NEWS", "HP", "ANR", "COPILOT",
+    "GRID", "ALL", "CLEAR", "QARE",
+}
 
 
 def parse_mnemonic_command(raw_input: str) -> Dict[str, Any]:
@@ -49,7 +55,7 @@ def parse_mnemonic_command(raw_input: str) -> Dict[str, Any]:
     if len(tokens) == 1:
         # e.g. "HMM", "DES", "PORT", "FA"
         tok = tokens[0].upper()
-        if tok in ("HMM", "PORT", "GP", "FA", "DES", "HELP", "TOP"):
+        if tok in KNOWN_MNEMONICS:
             mnemonic = tok
         else:
             identifier = tok
@@ -159,8 +165,9 @@ class JsonRpcUdsServer:
             # Merge client-provided parsed parameters if available
             if "parsed" in params and isinstance(params["parsed"], dict):
                 parsed.update(params["parsed"])
-            if parsed.get("identifier"):
-                self.active_tickers.add(str(parsed["identifier"]).upper())
+            ident = str(parsed.get("identifier", "")).upper()
+            if ident and ident not in KNOWN_MNEMONICS and len(self.active_tickers) < 64:
+                self.active_tickers.add(ident)
 
             return json.dumps({
                 "jsonrpc": "2.0",
@@ -419,28 +426,28 @@ class JsonRpcUdsServer:
             else:
                 prices_data = [
                     {
-                        "date": "2026-11-06",
-                        "open": 136.50,
-                        "high": 139.20,
-                        "low": 135.80,
-                        "close": 138.25,
-                        "vwap": 137.75,
-                        "volume": 42500000,
-                        "overnight_return": 0.81,
-                        "intraday_return": 1.28,
-                        "total_return": 2.10,
+                        "date": "2024-12-30",
+                        "open": 134.83,
+                        "high": 140.27,
+                        "low": 133.99,
+                        "close": 134.29,
+                        "vwap": 136.18,
+                        "volume": 167734700,
+                        "overnight_return": -1.59,
+                        "intraday_return": -0.40,
+                        "total_return": -1.99,
                     },
                     {
-                        "date": "2026-11-05",
-                        "open": 134.80,
-                        "high": 136.10,
-                        "low": 133.90,
-                        "close": 135.40,
-                        "vwap": 135.13,
-                        "volume": 38100000,
-                        "overnight_return": 0.40,
-                        "intraday_return": 0.45,
-                        "total_return": 0.85,
+                        "date": "2024-12-27",
+                        "open": 138.54,
+                        "high": 139.02,
+                        "low": 134.71,
+                        "close": 137.01,
+                        "vwap": 136.91,
+                        "volume": 170582600,
+                        "overnight_return": -0.99,
+                        "intraday_return": -1.10,
+                        "total_return": -2.09,
                     },
                 ]
             return json.dumps({
@@ -454,11 +461,11 @@ class JsonRpcUdsServer:
             if self.analyst_ratings_provider:
                 ratings_data = self.analyst_ratings_provider(ticker)
             else:
-                current_p = 138.25 if ticker == "NVDA" else 150.00
-                mean_t = 155.00 if ticker == "NVDA" else 165.00
-                median_t = 150.00 if ticker == "NVDA" else 162.00
-                high_t = 175.00 if ticker == "NVDA" else 185.00
-                low_t = 120.00 if ticker == "NVDA" else 130.00
+                current_p = 134.29 if ticker == "NVDA" else 176.55
+                mean_t = 168.50 if ticker == "NVDA" else 205.00
+                median_t = 165.00 if ticker == "NVDA" else 200.00
+                high_t = 200.00 if ticker == "NVDA" else 240.00
+                low_t = 135.00 if ticker == "NVDA" else 160.00
                 upside = round(((mean_t - current_p) / current_p) * 100.0, 2)
                 ratings_data = {
                     "ticker": ticker,
@@ -541,9 +548,9 @@ class JsonRpcUdsServer:
                             "conviction_tier": "HIGH",
                             "unconstrained_kelly_pct": 6.40,
                             "l1_normalized_portfolio_allocation_pct": 6.40,
-                            "entry_price": 138.25 if eff_ticker == "NVDA" else 150.00,
-                            "dynamic_take_profit": 152.00 if eff_ticker == "NVDA" else 165.00,
-                            "dynamic_stop_loss": 131.30 if eff_ticker == "NVDA" else 142.50,
+                            "entry_price": 134.29 if eff_ticker == "NVDA" else 176.55,
+                            "dynamic_take_profit": 146.50 if eff_ticker == "NVDA" else 192.00,
+                            "dynamic_stop_loss": 128.20 if eff_ticker == "NVDA" else 168.80,
                             "reward_to_risk_ratio": 2.0,
                         }
                     rec_obj = sig.get("execution_recommendation", sig)

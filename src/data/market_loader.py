@@ -286,7 +286,7 @@ class MarketDataLoader:
         ticker: str,
         start_date: str = "2020-01-01",
         end_date: str = "2024-12-31",
-        fallback_synthetic: bool = True,
+        fallback_synthetic: bool = False,
         provider: Optional[str] = None,
     ) -> pd.DataFrame:
         """

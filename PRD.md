@@ -26,7 +26,7 @@
 
 The system is architected into two deeply integrated subsystems:
 1. **`amstal-engine`**: A high-performance quantitative alpha generation and portfolio risk engine (QARE-MM v1.3). It ingests multi-modal market data (Point-in-Time prices, SEC EDGAR XBRL filings, Form 4 insider transactions, 10-Q/10-K redline diffs, and rolling statistical peer graphs), strips macro and sector beta via 2-stage sequential OLS orthogonalization to isolate idiosyncratic alpha, evaluates market regime states via forward-filtered Gaussian HMMs, and computes multi-outcome fractional Kelly allocations net of execution friction with portfolio-level $L_1$ gross exposure normalization.
-2. **`amstal-terminal`**: A low-latency desktop workstation reverse-engineered from the **Bloomberg Terminal** and **OpenBB Platform/Workspace**. Built on Tauri 2.0 (Rust) and Svelte 5 (Runes + `paneforge` reactive split-pane grid), it features a 4-panel color-linked workspace, an RPN mnemonic command engine (`<GO>` syntax), real-time 100ms conflated streaming, QMK mechanical keyboard hardware integration, and a local agentic financial copilot.
+2. **`amstal-terminal`**: A low-latency desktop workstation reverse-engineered from the **Bloomberg Terminal** and **OpenBB Platform/Workspace**. Built on Tauri 2.0 (Rust) and Svelte 5 (Runes + `paneforge` reactive split-pane grid), it features a 4-panel color-linked workspace, an RPN mnemonic command engine (`<GO>` syntax), real-time 100ms conflated streaming, and a local agentic financial copilot.
 
 ```
 ┌─────────────────────────────────────────────────────────────────────────────────────────────────┐
@@ -39,7 +39,6 @@ The system is architected into two deeply integrated subsystems:
   │  • 4-Tile Reactive Workspace with Multi-Color Channel Linking (Blue/Amber/Green/Red)        │
   │  • TradingView Lightweight Charts (WebGL/Canvas) & Point-in-Time Financial Tables           │
   │  • Mnemonic Omnibar REPL (`AAPL US <EQUITY> DES <GO>`) + Hybrid Fuzzy Search (`cmdk`)      │
-  │  • Starboard Keyboard Integration (QMK/VIA firmware, Color-coded keys, Rotary scrubber)    │
   │  • Local Copilot & Chat Interface (Ollama `Llama-3.1-8B` + LanceDB document QA)             │
   └──────────────────────────────────────────────┬──────────────────────────────────────────────┘
                                                  │
@@ -219,7 +218,7 @@ To avoid frontend scope creep and ensure the core quantitative workflow launches
 | **`DES <GO>`** | Description | Security master factsheet, business overview, CIK/FIGI identifiers, GICS classification, market cap, 60d orthogonalized betas, dividend yield. |
 | **`FA <GO>`** | Financial Analysis | Point-in-Time 10-year financial statements sourced via `edgartools` + deterministic US-GAAP XBRL tag fallback hierarchy, keyed strictly by `filed` date. |
 
-#### Tier 2: Alt-Data, Peer Graph & Hardware Suite (Phase 4B)
+#### Tier 2: Alt-Data & Peer Graph Suite (Phase 4B)
 | Function | Bloomberg Equivalent | Amstal Implementation & Data Source |
 | :--- | :--- | :--- |
 | **`SPLC <GO>`** | Supply Chain / Peer Map | Interactive dynamic rolling peer graph showing GICS sub-industry peers and 5-day lead-lag cross-correlation networks from `peer_gat.py`. |
@@ -228,18 +227,7 @@ To avoid frontend scope creep and ensure the core quantitative workflow launches
 | **`HP <GO>`** | Historical Price | Interactive tabular historical price, volume, split/dividend adjustments, and overnight vs. intraday return decomposition. |
 | **`ANR <GO>`** | Analyst Recommendations | Consensus price targets, recommendation distributions (Buy/Hold/Sell), and revision trajectories. |
 
-### 3.3 Hardware Starboard Emulation (QMK / VIA — Tier 2)
-Amstal provides native firmware configuration files for custom mechanical keyboards (75%/80% layouts):
-* **Top Row (F1–F10 Macros)**: `<GOVT>`, `<CORP>`, `<EQUITY>`, `<CURNCY>`, `<CMDTY>`, `<INDEX>`, `<CLIENT>`.
-* **Execution Keys**:
-  * `Enter` mapped to green `<GO>` keycode.
-  * `Esc` mapped to red `<CANCEL>` keycode.
-  * `F12` mapped to `<HELP>` (press twice to summon the local AI copilot).
-* **Rotary Encoder**:
-  * Turn: Scrub historical timeseries candlesticks forward/backward.
-  * Press + Turn: Zoom in/out of timeframe resolution (1m $\to$ 5m $\to$ 1h $\to$ 1d).
-
-### 3.4 4-Panel Reactive Split-Pane Workspace (`paneforge` + Svelte 5 Runes)
+### 3.3 4-Panel Reactive Split-Pane Workspace (`paneforge` + Svelte 5 Runes)
 * Replicates Bloomberg's canonical 4-panel multi-monitor workstation using native Svelte 5 reactive runes (`$state`, `$derived`) and `paneforge` / CSS Grid (avoiding legacy imperative DOM managers like GoldenLayout).
 * **Color Channel Synchronization**: Panels support linked color channels (Blue, Amber, Green, Red). Linking Panel 1 (Chart) and Panel 2 (Financials) to the Blue Channel means entering `AAPL <GO>` in Panel 1 automatically updates Panel 2 to Apple's Point-in-Time financials.
 
@@ -604,8 +592,7 @@ amstal/
     │   └── src/
     │       ├── main.rs                # Application entrypoint & engine daemon supervisor
     │       ├── ipc_client.rs          # UDS JSON-RPC & WebSocket (:8194) client
-    │       ├── parquet_query.rs       # Stateless :memory: duckdb-rs reader over Parquet files
-    │       └── keyboard.rs            # Global hotkey & QMK USB HID listener (Tier 2)
+    │       └── parquet_query.rs       # Stateless :memory: duckdb-rs reader over Parquet files
     ├── src/                           # Svelte 5 Runes UI
     │   ├── App.svelte                 # Master 4-tile paneforge / CSS Grid workspace
     │   ├── components/

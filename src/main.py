@@ -6,9 +6,9 @@ Spawns the UDS JSON-RPC 2.0 listener (/tmp/amstal.sock) and WebSocket broadcaste
 import asyncio
 import datetime
 import logging
-import random
 import signal
 import sys
+import time
 from typing import Optional
 
 from src.ipc.live_providers import LiveInferenceProvider
@@ -32,20 +32,17 @@ class AmstalEngineDaemon:
         ws_port: int = 8194,
     ) -> None:
         self.live_provider = LiveInferenceProvider()
-        if self.live_provider.is_ready():
-            logger.info("Initializing JsonRpcUdsServer with live trained model providers.")
-            self.uds_server = JsonRpcUdsServer(
-                socket_path=socket_path,
-                signal_provider=self.live_provider.get_signal,
-                portfolio_provider=self.live_provider.get_portfolio,
-                regime_provider=self.live_provider.get_macro_regime,
-                security_master_provider=self.live_provider.get_security_master,
-                historical_prices_provider=self.live_provider.get_historical_prices,
-                analyst_ratings_provider=self.live_provider.get_analyst_ratings,
-            )
-        else:
-            logger.warning("No production weights found. Initializing JsonRpcUdsServer in reference stub mode.")
-            self.uds_server = JsonRpcUdsServer(socket_path=socket_path)
+        logger.info("Initializing JsonRpcUdsServer with lakehouse & live model providers.")
+        self.uds_server = JsonRpcUdsServer(
+            socket_path=socket_path,
+            signal_provider=self.live_provider.get_signal,
+            portfolio_provider=self.live_provider.get_portfolio,
+            regime_provider=self.live_provider.get_macro_regime,
+            security_master_provider=self.live_provider.get_security_master,
+            peer_graph_provider=self.live_provider.get_peer_graph,
+            historical_prices_provider=self.live_provider.get_historical_prices,
+            analyst_ratings_provider=self.live_provider.get_analyst_ratings,
+        )
 
         self.ws_broadcaster = WebSocketBroadcaster(
             host=ws_host,
@@ -74,7 +71,7 @@ class AmstalEngineDaemon:
                             regime = self.live_provider.get_macro_regime()
                             self.ws_broadcaster.queue_regime(regime)
                             for sym in watchlist:
-                                sig = self.live_provider.get_signal(sym)
+                                sig = self.live_provider.get_signal(sym, regime=regime)
                                 self.ws_broadcaster.queue_signal(sym, sig)
                             last_closed_broadcast = now_ts
                         await asyncio.sleep(5.0)
@@ -85,19 +82,11 @@ class AmstalEngineDaemon:
                     self.ws_broadcaster.queue_regime(regime)
                     active_pool = list(dict.fromkeys(watchlist + list(self.uds_server.active_tickers)))
                     sym = active_pool[step % len(active_pool)]
-                    sig = self.live_provider.get_signal(sym)
+                    sig = self.live_provider.get_signal(sym, regime=regime)
                     self.ws_broadcaster.queue_signal(sym, sig)
-                    entry_p = float(sig.get("execution_recommendation", {}).get("entry_price", 138.25))
-                    self.ws_broadcaster.queue_tick(
-                        sym,
-                        {
-                            "ticker": sym,
-                            "price": entry_p,
-                            "change": 0.0,
-                            "change_pct": 0.0,
-                            "volume": 42500000,
-                        },
-                    )
+                    quote = self.live_provider.get_latest_quote(sym)
+                    if quote["price"] > 0:
+                        self.ws_broadcaster.queue_tick(sym, quote)
                     step += 1
                     await asyncio.sleep(1.0)
                 else:
